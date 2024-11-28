@@ -14,11 +14,13 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 	const camera = new THREE.PerspectiveCamera( fov, aspect, near, far );
 	camera.position.z = 4;
 
+	/*
 	const controls = new OrbitControls( camera, inputElement );
    controls.enableDamping = true;
    controls.dampingFactor = 0.055;
 	controls.target.set( 0, 0, 0 );
 	controls.update();
+	*/
 
 	const scene = new THREE.Scene();
 
@@ -80,7 +82,7 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
   
    
    // Number of times to duplicate
-   const timesToDuplicate = 500;
+   const timesToDuplicate = 3000;
    
    // Create the cubes array by executing makeInstance for eac copy
    const cubes = [];
@@ -171,7 +173,7 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 
 		pickHelper.pick( pickPosition, scene, camera, time );
 
-      controls.update();
+      // controls.update();
 
 		renderer.render( scene, camera );
 
