@@ -37,7 +37,7 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 	const boxDepth = 1;
 	const geometry = new THREE.BoxGeometry( boxWidth, boxHeight, boxDepth );
 
-	function makeInstance( geometry, color, x ) {
+	function makeInstance( geometry, color, position) {
 
 		const material = new THREE.MeshPhongMaterial( {
 			color,
@@ -46,27 +46,41 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 		const cube = new THREE.Mesh( geometry, material );
 		scene.add( cube );
 
-		cube.position.x = x;
+		// cube.position.x = x;
+       cube.position.set(position.x, position.y, position.z);
+
 
 		return cube;
 
 	}
-
+/*
 	const cubes = [
 		makeInstance( geometry, 0x44aa88, 0 ),
 		makeInstance( geometry, 0x8844aa, - 2 ),
 		makeInstance( geometry, 0xaa8844, 2 ),
 	];
+   */
    
-   /*
    const cubes1 = [
-      () => makeInstance(geometry, 0x44aa88, 0),
-      () => makeInstance(geometry, 0x8844aa, -2),
-      () => makeInstance(geometry, 0xaa8844, 2),
-   ];
+      () => makeInstance(geometry, 0x44aa88, getRandomPosition()),
+      () => makeInstance(geometry, 0x8844aa, getRandomPosition()),
+      () => makeInstance(geometry, 0xaa8844, getRandomPosition()),
+  ];
+  
+  // Helper function to generate random positions
+  function getRandomPosition() {
+   const min = -30;
+   const max = 30;
+   return {
+       x: Math.random() * (max - min) + min,
+       y: Math.random() * (max - min) + min,
+       z: Math.random() * (max - min) * 1 + min - 40
+   };
+}
+  
    
    // Number of times to duplicate
-   const timesToDuplicate = 10000;
+   const timesToDuplicate = 500;
    
    // Create the cubes array by executing makeInstance for eac copy
    const cubes = [];
@@ -75,7 +89,7 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
             cubes.push(instance()); // Call each function in cubes1
          }
    }
-   */
+   
 
 	class PickHelper {
 
@@ -148,7 +162,7 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 
 		cubes.forEach( ( cube, ndx ) => {
 
-			const speed = 1 + ndx * .1;
+			const speed = 1 + ndx * .0001;
 			const rot = time * speed;
 			cube.rotation.x = rot;
 			cube.rotation.y = rot;
