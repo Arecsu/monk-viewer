@@ -10,10 +10,13 @@
     "deploy": "vite build && gh-pages --dotfiles --nojekyll -d dist"
   },
   "devDependencies": {
-    "vite": "^6.0.1",
-    "gh-pages": "^6.2.0"
+    "gh-pages": "^6.2.0",
+    "vite": "^6.0.1"
   },
   "dependencies": {
+    "@monogrid/gainmap-js": "file:./monogrid-gainmap-js-3.0.6.tgz",
+    "@types/three": "^0.170.0",
+    "postprocessing": "^6.36.4",
     "three": "^0.170.0"
   }
 }

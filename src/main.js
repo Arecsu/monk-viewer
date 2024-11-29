@@ -86,6 +86,8 @@ class ElementProxy {
   constructor(element, worker, eventHandlers) {
     this.id = nextProxyId++;
     this.worker = worker;
+    this.element = element;
+
     const sendEvent = (data) => {
       this.worker.postMessage({
         type: "event",
@@ -94,31 +96,59 @@ class ElementProxy {
       });
     };
 
-    // register an id
+    // Register an id
     worker.postMessage({
       type: "makeProxy",
       id: this.id,
     });
-    sendSize();
+
+    // Create ResizeObserver
+    this.resizeObserver = new ResizeObserver((_entries) => {
+      requestAnimationFrame(() => {
+        const rect = this.element.getBoundingClientRect();
+        sendEvent({
+          type: "size",
+          left: rect.left,
+          top: rect.top,
+          width: this.element.clientWidth,
+          height: this.element.clientHeight,
+        });
+      });
+    });
+
+    // Initial size send
+    this.sendSize(sendEvent);
+
+    // Observe the element
+    this.resizeObserver.observe(element);
+
+    // Add event listeners
     for (const [eventName, handler] of Object.entries(eventHandlers)) {
       element.addEventListener(eventName, function (event) {
         handler(event, sendEvent);
       });
     }
 
-    function sendSize() {
-      const rect = element.getBoundingClientRect();
-      sendEvent({
-        type: "size",
-        left: rect.left,
-        top: rect.top,
-        width: element.clientWidth,
-        height: element.clientHeight,
-      });
-    }
+    // Fallback resize listener
+    // window.addEventListener("resize", () => this.sendSize(sendEvent));
+  }
 
-    // really need to use ResizeObserver
-    window.addEventListener("resize", sendSize);
+  sendSize(sendEvent) {
+    const rect = this.element.getBoundingClientRect();
+    sendEvent({
+      type: "size",
+      left: rect.left,
+      top: rect.top,
+      width: this.element.clientWidth,
+      height: this.element.clientHeight,
+    });
+  }
+
+  // Optional: Cleanup method to disconnect observer
+  disconnect() {
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+    }
   }
 }
 

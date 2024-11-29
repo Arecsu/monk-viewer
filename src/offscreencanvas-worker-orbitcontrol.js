@@ -47,7 +47,6 @@ class ElementProxyReceiver extends EventDispatcher {
 
 	}
 	handleEvent( data ) {
-
 		if ( data.type === 'size' ) {
 
 			this.left = data.left;
