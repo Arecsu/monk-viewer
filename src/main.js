@@ -158,6 +158,7 @@ function startWorker(canvas) {
   const worker = new Worker(
     new URL('./offscreencanvas-worker-orbitcontrol.js', import.meta.url),
     { type: 'module' });
+  const pixelRatio = window.devicePixelRatio || 1;
   const eventHandlers = {
     contextmenu: preventDefaultHandler,
     mousedown: mouseEventHandler,
@@ -177,6 +178,7 @@ function startWorker(canvas) {
     type: "start",
     canvas: offscreen,
     canvasId: proxy.id,
+    pixelRatio: pixelRatio
   }, [offscreen]);
   console.log("using OffscreenCanvas"); /* eslint-disable-line no-console */
 }

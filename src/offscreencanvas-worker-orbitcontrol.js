@@ -106,6 +106,7 @@ function start( data ) {
 	init( {
 		canvas: data.canvas,
 		inputElement: proxy,
+		pixelRatio: data.pixelRatio
 	} );
 
 }

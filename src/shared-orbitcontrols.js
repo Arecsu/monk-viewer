@@ -4,16 +4,17 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { HDRJPGLoader } from '@monogrid/gainmap-js';
 import helmetModelUrl from './McLovin-1024x.glb?url';
 import HDRIMAP from './old_bus_depot_2k_HDR.jpg?url';
-import { BloomEffect, EffectComposer, EffectPass, RenderPass, BlendFunction, BrightnessContrastEffect, HueSaturationEffect, ToneMappingEffect, ToneMappingMode, SMAAEffect, EdgeDetectionMode, SMAAPreset } from "postprocessing";
+import { BloomEffect, EffectComposer, EffectPass, RenderPass, BlendFunction, BrightnessContrastEffect, HueSaturationEffect, ToneMappingEffect, ToneMappingMode, SMAAEffect, EdgeDetectionMode, SMAAPreset, FXAAEffect } from "postprocessing";
 
 export function init( data ) { /* eslint-disable-line no-unused-vars */
 
-	const { canvas, inputElement } = data;
-	const renderer = new THREE.WebGLRenderer( { antialias: true, canvas } );
+	const { canvas, inputElement, pixelRatio } = data;
+	const renderer = new THREE.WebGLRenderer( { antialias: false, canvas } );
+	renderer.setPixelRatio(pixelRatio || 1)
 	renderer.outputColorSpace = THREE.SRGBColorSpace;
 	renderer.toneMapping = THREE.NoToneMapping;
+	renderer.toneMappingExposure = 1.5;
 	// renderer.toneMapping = THREE.ReinhardToneMapping;
-	// renderer.toneMappingExposure = 2;
 	// renderer.toneMapping = THREE.ReinhardToneMapping;
 	// renderer.toneMappingExposure = 1.5;
 	// renderer.toneMapping = THREE.CineonToneMapping;
@@ -21,12 +22,12 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 	// renderer.toneMapping = THREE.AgXToneMapping;
 	// renderer.toneMapping = THREE.ACESFilmicToneMapping;
 
-	const fov = 75;
+	const fov = 50;
 	const aspect = 2; // the canvas default
 	const near = 0.1;
 	const far = 100;
 	const camera = new THREE.PerspectiveCamera( fov, aspect, near, far );
-	camera.position.z = 4;
+	camera.position.z = 0.8;
 
 	const controls = new OrbitControls( camera, inputElement );
    controls.enableDamping = true;
@@ -53,15 +54,36 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 		const loader = new GLTFLoader()
 		loader.load( helmetModelUrl, async function ( gltf ) {
 			const model = gltf.scene;
-			model.scale.set(7, 7, 7);
+			model.scale.set(1, 1, 1);
+
+			// Improve texture quality for all materials in the model
+			model.traverse((child) => {
+            if (child.isMesh) {
+                // Helper function to apply optimal texture settings
+                const optimizeTexture = (texture) => {
+                    if (texture) {
+                        // texture.minFilter = THREE.LinearFilter;
+                        texture.minFilter = THREE.LinearMipmapLinearFilter;
+                        texture.magFilter = THREE.LinearFilter;
+                        texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+								// texture.anisotropy = false;
+                        texture.generateMipmaps = true;
+                    }
+                };
+
+                // Apply to all available texture maps
+                optimizeTexture(child.material.map);           // Base color/diffuse map
+                optimizeTexture(child.material.normalMap);     // Normal map
+                optimizeTexture(child.material.roughnessMap);  // Roughness map
+                optimizeTexture(child.material.metalnessMap);  // Metalness map
+            }
+        });
 
 			// wait until the model can be added to the scene without blocking due to shader compilation
-
 			await renderer.compileAsync( model, camera, scene );
 
 			mixer = new THREE.AnimationMixer( model );
-			console.log(gltf.animations)
-			var action = mixer.clipAction( gltf.animations[ 0 ] );
+			const action = mixer.clipAction( gltf.animations[ 0 ] );
 			action.play();
 
 			scene.add( model );
@@ -81,8 +103,8 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 			//  hdrTexture.magFilter = THREE.LinearFilter;
 			 hdrTexture.needsUpdate = true;
 			 
-			 // scene.background = hdrTexture;
-			 // scene.background.mapping = THREE.EquirectangularReflectionMapping;
+			//  scene.background = hdrTexture;
+			//  scene.background.mapping = THREE.EquirectangularReflectionMapping;
 			 scene.environment = hdrTexture;
 			 scene.environment.mapping = THREE.EquirectangularReflectionMapping;
   
@@ -100,27 +122,28 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 
 	const smaaEffect = new SMAAEffect({
 		preset: SMAAPreset.HIGH,
-		edgeDetectionMode: EdgeDetectionMode.DEPTH
+		edgeDetectionMode: EdgeDetectionMode.COLOR
   });
-  smaaEffect.edgeDetectionMaterial.edgeDetectionThreshold = 0.01;
+  smaaEffect.edgeDetectionMaterial.edgeDetectionThreshold = 0.001;
+  smaaEffect.edgeDetectionMaterial.localContrastAdaptationFactor = 2;
 
   const bloomEffect = new BloomEffect({
 		// blendFunction:
 		luminanceThreshold: 0.5,
 		luminanceSmoothing: 0.1,
 		mipmapBlur: 1,
-		intensity: 4, 
+		intensity: 0.8, 
 		radius: 0.7,
 		// levels, 
   })
 
 	const toneMappingEffect = new ToneMappingEffect({
-		mode: ToneMappingMode.REINHARD2,
+		mode: ToneMappingMode.REINHARD,
 		resolution: 256,
-		whitePoint: 30.0,
-		middleGrey: 0.6,
+		whitePoint: 10.0,
+		middleGrey: 0.8,
 		minLuminance: 0.01,
-		averageLuminance: 0.001,
+		averageLuminance: 0.1,
 		adaptationRate: 1.0,
 		// blendFunction: BlendFunction.MULTIPLY,
 	});
@@ -134,18 +157,35 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 
 	const brightnessContrastEffect = new BrightnessContrastEffect({
 		brightness: 0,   // Range: -1 to 1
-		contrast: 0,     // Range: -1 to 1
+		contrast: 0.1,     // Range: -1 to 1
 		blendFunction: BlendFunction.NORMAL
 	});
+
+
+	const fxaaEffect = new FXAAEffect();
+
+
+	composer.addPass(new EffectPass(
+		camera,
+		// smaaEffect,
+		fxaaEffect
+	));
+
+	const bloomPass = new EffectPass(
+		camera,
+		bloomEffect,
+	); 
+
+	bloomPass.dithering = true
+
+	composer.addPass(bloomPass)
 
 	// Add all effects to a single pass
 	composer.addPass(new EffectPass(
 		camera,
-		// SMAAEffect,
-		// bloomEffect,
-		// toneMappingEffect,
 		// hueSaturationEffect,
-		// brightnessContrastEffect,
+		toneMappingEffect,
+		brightnessContrastEffect,
 	));
 
 
