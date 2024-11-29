@@ -2,9 +2,10 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { HDRJPGLoader } from '@monogrid/gainmap-js';
+import { BloomEffect, EffectComposer, EffectPass, RenderPass, BlendFunction, BrightnessContrastEffect, HueSaturationEffect, ToneMappingEffect, ToneMappingMode, SMAAEffect, EdgeDetectionMode, SMAAPreset, FXAAEffect } from "postprocessing";
+
 import helmetModelUrl from './McLovin-1024x.glb?url';
 import HDRIMAP from './old_bus_depot_2k_HDR.jpg?url';
-import { BloomEffect, EffectComposer, EffectPass, RenderPass, BlendFunction, BrightnessContrastEffect, HueSaturationEffect, ToneMappingEffect, ToneMappingMode, SMAAEffect, EdgeDetectionMode, SMAAPreset, FXAAEffect } from "postprocessing";
 
 export function init( data ) { /* eslint-disable-line no-unused-vars */
 
