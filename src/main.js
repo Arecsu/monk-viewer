@@ -184,7 +184,7 @@ function startWorker(canvas) {
 }
 
 function startMainPage(canvas) {
-  init({ canvas, inputElement: canvas });
+  init({ canvas, inputElement: canvas, pixelRatio: window.devicePixelRatio });
   console.log("using regular canvas"); /* eslint-disable-line no-console */
 }
 

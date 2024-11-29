@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { HDRJPGLoader } from '@monogrid/gainmap-js';
-import { BloomEffect, EffectComposer, EffectPass, RenderPass, BlendFunction, BrightnessContrastEffect, HueSaturationEffect, ToneMappingEffect, ToneMappingMode, SMAAEffect, EdgeDetectionMode, SMAAPreset, FXAAEffect } from "postprocessing";
+import { BloomEffect, EffectComposer, EffectPass, RenderPass, BlendFunction, BrightnessContrastEffect, HueSaturationEffect, ToneMappingEffect, ToneMappingMode, FXAAEffect } from "postprocessing";
 
 import helmetModelUrl from './McLovin-1024x.glb?url';
 import HDRIMAP from './old_bus_depot_2k_HDR.jpg?url';
@@ -10,7 +10,13 @@ import HDRIMAP from './old_bus_depot_2k_HDR.jpg?url';
 export function init( data ) { /* eslint-disable-line no-unused-vars */
 
 	const { canvas, inputElement, pixelRatio } = data;
-	const renderer = new THREE.WebGLRenderer( { antialias: false, canvas } );
+	const renderer = new THREE.WebGLRenderer( { 
+		powerPreference: "high-performance",
+		antialias: false,
+		stencil: false,
+		depth: false,
+		canvas 
+	});
 	renderer.setPixelRatio(pixelRatio || 1)
 	renderer.outputColorSpace = THREE.SRGBColorSpace;
 	renderer.toneMapping = THREE.NoToneMapping;
@@ -114,19 +120,8 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 		});
 	}
 
-	const composer = new EffectComposer(renderer, {
-		frameBufferType: THREE.HalfFloatType
-	});
-	
-	composer.addPass(new RenderPass(scene, camera));
-	// composer.addPass(new EffectPass(camera, new BloomEffect()));
 
-	const smaaEffect = new SMAAEffect({
-		preset: SMAAPreset.HIGH,
-		edgeDetectionMode: EdgeDetectionMode.COLOR
-  });
-  smaaEffect.edgeDetectionMaterial.edgeDetectionThreshold = 0.001;
-  smaaEffect.edgeDetectionMaterial.localContrastAdaptationFactor = 2;
+
 
   const bloomEffect = new BloomEffect({
 		// blendFunction:
@@ -165,30 +160,55 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 
 	const fxaaEffect = new FXAAEffect();
 
+	const composer = new EffectComposer(renderer, {
+		frameBufferType: THREE.HalfFloatType
+	});
 
-	composer.addPass(new EffectPass(
-		camera,
-		// smaaEffect,
-		fxaaEffect
-	));
-
+	
+	composer.addPass(new RenderPass(scene, camera));
 	const bloomPass = new EffectPass(
 		camera,
-		bloomEffect,
+		fxaaEffect,
+		// bloomEffect
 	); 
-
-	bloomPass.dithering = true
-
+	// bloomPass.dithering = true
 	composer.addPass(bloomPass)
-
+	
 	// Add all effects to a single pass
 	composer.addPass(new EffectPass(
 		camera,
+		// bloomEffect,
 		// hueSaturationEffect,
 		toneMappingEffect,
 		brightnessContrastEffect,
 	));
+	
 
+	/*
+	composer.addPass(new RenderPass(scene, camera));
+
+	// Add all effects to a single pass
+	composer.addPass(new EffectPass(
+		camera,
+		fxaaEffect,
+		bloomEffect,
+		// hueSaturationEffect,
+		toneMappingEffect,
+		brightnessContrastEffect,
+	));
+	*/
+
+	// composer.dithering = true
+
+
+	/*
+	const bloomPass = new EffectPass(
+		camera,
+		bloomEffect
+	); 
+	bloomPass.dithering = true
+	composer.addPass(bloomPass)
+	*/
 
 	const boxWidth = 1;
 	const boxHeight = 1;
