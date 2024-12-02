@@ -107,7 +107,8 @@ function start( data ) {
 	init( {
 		canvas: data.canvas,
 		inputElement: proxy,
-		pixelRatio: data.pixelRatio
+		pixelRatio: data.pixelRatio,
+		lowPerformanceMode: data.lowPerformanceMode
 	} );
 
 }

@@ -32,8 +32,9 @@ class ThreeSceneManager {
 		this.canvas = data.canvas;
 		this.inputElement = data.inputElement;
 		this.initialPixelRatio = data.pixelRatio || window.devicePixelRatio;
-		this.customPixelRatio = null;
-		this.msaaSamples = 4;
+		this.lowPerformanceMode = data.lowPerformanceMode;
+		this.customPixelRatio = this.lowPerformanceMode ? 1 : null;
+		this.msaaSamples = this.lowPerformanceMode ? 0 : 4;
 
 		this.scene = null;
 		this.camera = null;
@@ -197,7 +198,7 @@ class ThreeSceneManager {
 			// action.play();
 
 			this.scene.add(model);
-			this.startPerformanceSamplingLoop();
+			this.lowPerformanceMode ? this.startRenderLoop() : this.startPerformanceSamplingLoop();
 		});
 	}
 

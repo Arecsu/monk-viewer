@@ -161,7 +161,13 @@ class ElementProxy {
   }
 }
 
-function startWorker(canvas) {
+function isFirefoxForAndroid() {
+  const firefoxAndroidRegex = /Android(?!.*KHTML).*Gecko/i;
+  return firefoxAndroidRegex.test(navigator.userAgent);
+}
+
+
+function startWorker(canvas, lowPerformanceMode = false) {
   // canvas.focus();
   const offscreen = canvas.transferControlToOffscreen();
   const worker = new Worker(
@@ -188,24 +194,27 @@ function startWorker(canvas) {
     type: "start",
     canvas: offscreen,
     canvasId: proxy.id,
-    pixelRatio: pixelRatio
+    pixelRatio: pixelRatio,
+    lowPerformanceMode: lowPerformanceMode,
   }, [offscreen]);
   console.log("using OffscreenCanvas"); /* eslint-disable-line no-console */
 }
 
-function startMainPage(canvas) {
-  init({ canvas, inputElement: canvas, pixelRatio: window.devicePixelRatio });
+function startMainPage(canvas, disableMSAA = false) {
+  init({ canvas, inputElement: canvas, pixelRatio: window.devicePixelRatio, lowPerformanceMode });
   console.log("using regular canvas"); /* eslint-disable-line no-console */
 }
 
 function main() {
   /* eslint consistent-return: 0 */
 
+  const lowPerformanceMode = isFirefoxForAndroid(); // workaround, performs poorly with MSAA
+
   const canvas = document.querySelector("#c");
   if (canvas.transferControlToOffscreen) {
-    startWorker(canvas);
+    startWorker(canvas, lowPerformanceMode);
   } else {
-    startMainPage(canvas);
+    startMainPage(canvas, lowPerformanceMode);
   }
 }
 
