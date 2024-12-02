@@ -1,7 +1,8 @@
 monk-viewer
 -----------
 
-model-viewer (https://modelviewer.dev/) is nice. But here are performance and feature implications that made me start my own 3D viewer for a specific project.
+model-viewer (https://modelviewer.dev/) is nice. 
+But there are performance and feature implications.
 Let's grab three.js and see what we can do.
 
 Welcome monk-viewer!
