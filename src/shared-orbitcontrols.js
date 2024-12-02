@@ -275,7 +275,8 @@ class ThreeSceneManager {
 					const maxFPS = getAverage(fpsSamples.slice(3));
 					const targetFPS = 75;
 
-					console.log(maxFPS);
+					console.log('maxfps: ', maxFPS);
+					console.log('fpssamples: ', fpsSamples);
 
 					if (maxFPS < 50) {
 						this.msaaSamples = 0;
@@ -309,9 +310,22 @@ class ThreeSceneManager {
 	}
 
 	startRenderLoop() {
+		let prevTime = 0;
+		let frames = 0;
+		const maxSamples = 5;
+
 		const render = (time) => {
 			time *= 0.001;
 			const now = Date.now();
+
+			frames++;
+
+			if (time >= prevTime + 1) { // 0.1 second has passed
+				const fps = frames / (time - prevTime);
+				console.log(fps)
+				prevTime = time;
+				frames = 0;
+			}
 
 			this.handleResize();
 			this.updateScene(time, now);
