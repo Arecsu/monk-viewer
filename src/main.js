@@ -23,13 +23,21 @@ const keydownEventHandler = makeSendPropertiesHandler([
   "keyCode",
 ]);
 
+const defaultEventHandlerImpl = makeSendPropertiesHandler([]);
+
 function wheelEventHandler(event, sendFn) {
   event.preventDefault();
   wheelEventHandlerImpl(event, sendFn);
 }
 
 function preventDefaultHandler(event) {
+  // Shutdown an event
   event.preventDefault();
+}
+
+function defaultEventHandler(event, sendFn) {
+  // Pass the event as-is to allow default behavior
+  sendFn({ type: event.type })
 }
 
 function copyProperties(src, properties, dst) {
@@ -112,6 +120,7 @@ class ElementProxy {
           top: rect.top,
           width: this.element.clientWidth,
           height: this.element.clientHeight,
+          pixelRatio: window.devicePixelRatio || 1
         });
       });
     });
@@ -160,10 +169,11 @@ function startWorker(canvas) {
     { type: 'module' });
   const pixelRatio = window.devicePixelRatio || 1;
   const eventHandlers = {
-    contextmenu: preventDefaultHandler,
+    contextmenu: defaultEventHandler,
     mousedown: mouseEventHandler,
     mousemove: mouseEventHandler,
     mouseup: mouseEventHandler,
+    mouseleave: mouseEventHandler,
     pointerdown: mouseEventHandler,
     pointermove: mouseEventHandler,
     pointerup: mouseEventHandler,
