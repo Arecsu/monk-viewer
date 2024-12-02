@@ -31,10 +31,13 @@ class ThreeSceneManager {
 	constructor(data) {
 		this.canvas = data.canvas;
 		this.inputElement = data.inputElement;
-		this.initialPixelRatio = data.pixelRatio || window.devicePixelRatio;
 		this.lowPerformanceMode = data.lowPerformanceMode;
-		this.customPixelRatio = this.lowPerformanceMode ? 1 : null;
+		this.baseLoadPixelRatio = data.pixelRatio || window.devicePixelRatio;
+		this.initialRenderPixelRatio = this.lowPerformanceMode ? data.pixelRatio / 2 : this.baseLoadPixelRatio;
+		this.performantRenderPixelRatio = null;
 		this.msaaSamples = this.lowPerformanceMode ? 0 : 4;
+
+		this.pixelRatioVariation = 1; // this to handle screen DPI changes
 
 		this.scene = null;
 		this.camera = null;
@@ -68,7 +71,7 @@ class ThreeSceneManager {
 			canvas: this.canvas,
 		});
 
-		this.renderer.setPixelRatio(this.initialPixelRatio);
+		this.renderer.setPixelRatio(this.initialRenderPixelRatio);
 		this.renderer.toneMapping = THREE.ReinhardToneMapping;
 		//   this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
 		this.renderer.toneMappingExposure = 1.5;
@@ -198,7 +201,7 @@ class ThreeSceneManager {
 			// action.play();
 
 			this.scene.add(model);
-			this.lowPerformanceMode ? this.startRenderLoop() : this.startPerformanceSamplingLoop();
+			this.startPerformanceSamplingLoop();
 		});
 	}
 
@@ -279,7 +282,7 @@ class ThreeSceneManager {
 					console.log('maxfps: ', maxFPS);
 					console.log('fpssamples: ', fpsSamples);
 
-					if (maxFPS < 50) {
+					if (maxFPS < 50 && this.msaaSamples > 0) {
 						this.msaaSamples = 0;
 						this.resetPostProcessing();
 					}
@@ -289,11 +292,11 @@ class ThreeSceneManager {
 						const fpsRatio = maxFPS / targetFPS;
 
 						// Calculate the new pixel ratio
-						const potentialPixelRatio = Math.sqrt(this.initialPixelRatio ** 2.4 * fpsRatio);
+						const potentialPixelRatio = Math.sqrt(this.initialRenderPixelRatio ** 2.6 * fpsRatio);
 
-						this.customPixelRatio = Math.max(
+						this.performantRenderPixelRatio = Math.max(
 							0.8,
-							Math.min(potentialPixelRatio, this.initialPixelRatio),
+							Math.min(potentialPixelRatio, this.initialRenderPixelRatio),
 						);
 						console.log(potentialPixelRatio);
 					}
@@ -339,10 +342,14 @@ class ThreeSceneManager {
 	}
 
 	handleResize(forceResize = false) {
-		const { clientWidth: width, clientHeight: height, pixelRatio } =
-			this.inputElement;
-		const pixelRatioE = this.customPixelRatio || pixelRatio ||
-			this.initialPixelRatio || window.devicePixelRatio;
+		const { clientWidth: width, clientHeight: height, pixelRatio } = this.inputElement;
+		this.pixelRatioVariation = (pixelRatio / this.baseLoadPixelRatio) ?? 1;
+		const pixelRatioE = 
+			this.performantRenderPixelRatio 
+				? this.performantRenderPixelRatio * this.pixelRatioVariation
+				: this.initialRenderPixelRatio 
+						? this.initialRenderPixelRatio * this.pixelRatioVariation
+						: window.devicePixelRatio;
 		const now = Date.now();
 
 		if (forceResize || this.needsResize(now, width, height, pixelRatioE)) {
