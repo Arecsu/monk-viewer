@@ -2,393 +2,397 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { HDRJPGLoader } from "@monogrid/gainmap-js";
-
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
-import { CopyShader } from "three/addons/shaders/CopyShader.js";
-import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
+import { FXAAShader } from "three/addons/shaders/FXAAShader.js";
 
-// import ModShader from "./mod_meshphysical_complete.glsl?raw"
-
-import helmetModelUrl from "./McLovin-1024x.glb?url";
+// Import asset URLs
+import artworkModelUrl from "./McLovin-1024x.glb?url";
 import HDRIMAP from "./old_bus_depot_2k_HDR.jpg?url";
 
-function threeFXPatchEffect(instance) {
-    if (instance.patched) return; // Skip, already done!
-    instance.patched = true;
-    console.warn("AO-PATCH", "FX Patched for postprocessing lib", instance);
-    
-    // Override methods directly on the instance
-    instance.initialize = () => { };
-    instance.setRenderer = () => { };
-    instance.originalRender = instance.render.bind(instance);
-    instance.render = function (renderer, inputBuffer, outputBuffer, delta, maskActive) {
-        this.originalRender(renderer, outputBuffer, inputBuffer, delta, maskActive);
-    };
-    instance.setDepthTexture = () => {
-        console.warn("Not implemented in patcher");
-    };
-    return instance;
-}
+class ThreeSceneManager {
+	constructor(data) {
+		this.canvas = data.canvas;
+		this.inputElement = data.inputElement;
+		this.initialPixelRatio = data.pixelRatio || window.devicePixelRatio;
+		this.customPixelRatio = null;
 
-export function init(data) {
-	/* eslint-disable-line no-unused-vars */
+		this.scene = null;
+		this.camera = null;
+		this.renderer = null;
+		this.composer = null;
+		this.controls = null;
+		this.mixer = null;
+		this.pickHelper = null;
+		this.lastResizeTime = null;
+		this.throttleResize = 150; // miliseconds
 
-	let { canvas, inputElement, pixelRatio } = data;
-	const renderer = new THREE.WebGLRenderer({
-		powerPreference: "high-performance",
-		antialias: false,
-		// stencil: false,
-		// depth: false,
-		canvas,
-	});
-	pixelRatio = 1
-	renderer.setPixelRatio(pixelRatio || 1);
-	// renderer.outputColorSpace = THREE.SRGBColorSpace;
-	// renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-	// renderer.toneMapping = THREE.NoToneMapping;
-	// renderer.toneMappingExposure = 1.5;
-	// renderer.toneMapping = THREE.ReinhardToneMapping;
-	renderer.toneMapping = THREE.ReinhardToneMapping;
-	renderer.toneMappingExposure = 1.5;
-	// renderer.toneMapping = THREE.CineonToneMapping;
-	// renderer.toneMapping = THREE.NeutralToneMapping;
-	// renderer.toneMapping = THREE.AgXToneMapping;
-	// renderer.toneMapping = THREE.ACESFilmicToneMapping;
+		this.lastFrame = Date.now();
+		this.initScene();
+	}
 
+	initScene() {
+		this.setupRenderer();
+		this.setupCamera();
+		this.setupControls();
+		this.setupScene();
+		//   this.setupLighting();
+		this.setupPostProcessing();
+		this.setupInteraction();
+		this.loadAssets();
+	}
 
+	setupRenderer() {
+		this.renderer = new THREE.WebGLRenderer({
+			powerPreference: "high-performance",
+			antialias: true,
+			canvas: this.canvas,
+		});
 
-	const fov = 50;
-	const aspect = 2; // the canvas default
-	const near = 0.1;
-	const far = 100;
-	const camera = new THREE.PerspectiveCamera(fov, aspect, near, far);
-	camera.position.z = 0.8;
+		this.renderer.setPixelRatio(this.initialPixelRatio);
+		this.renderer.toneMapping = THREE.ReinhardToneMapping;
+		//   this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+		this.renderer.toneMappingExposure = 1.5;
+	}
 
-	const controls = new OrbitControls(camera, inputElement);
-	controls.enableDamping = true;
-	controls.dampingFactor = 0.055;
-	controls.target.set(0, 0, 0);
+	setupCamera() {
+		this.camera = new THREE.PerspectiveCamera(50, 2, 0.1, 100);
+		this.camera.position.z = 0.8;
+	}
 
-	controls.update();
+	setupControls() {
+		this.controls = new OrbitControls(this.camera, this.inputElement);
+		this.controls.enableDamping = true;
+		this.controls.dampingFactor = 0.055;
+		this.controls.target.set(0, 0, 0);
+		this.controls.update();
+	}
 
-	const scene = new THREE.Scene();
+	setupScene() {
+		this.scene = new THREE.Scene();
+		this.scene.background = new THREE.Color(0x000000);
+	}
 
-	const color = 0xFFFFFF;
-	const intensity = 1;
-	const light = new THREE.DirectionalLight(color, intensity);
-	scene.background = new THREE.Color( 0x000000 );
-	light.position.set(-10, 5, 40);
-	// scene.add( light );
+	setupLighting() {
+		const light = new THREE.DirectionalLight(0xFFFFFF, 10);
+		light.position.set(0, 0, 5);
+		this.scene.add(light);
+	}
 
-	let mixer;
-	let lastframe = Date.now();
-	let dt;
+	setupPostProcessing() {
+		const renderTarget = new THREE.WebGLRenderTarget(
+			this.inputElement.clientWidth,
+			this.inputElement.clientHeight,
+			{
+				samples: 8,
+				anisotropy: this.renderer.capabilities.getMaxAnisotropy(),
+				colorSpace: THREE.LinearSRGBColorSpace,
+				type: THREE.HalfFloatType,
+			},
+		);
 
-	{
-		const loader = new GLTFLoader();
-		loader.load(helmetModelUrl, async function (gltf) {
-			const model = gltf.scene;
-			model.scale.set(1, 1, 1);
+		this.composer = new EffectComposer(this.renderer, renderTarget);
 
-			// Improve texture quality for all materials in the model
-			model.traverse((child) => {
-				// console.log(child.material)
-				if (child.material) {
-					child.material.needsUpdate = true
-					child.material.onBeforeCompile = (shader) => {
-						// Inject code into the shader
-						// console.log(shader.fragmentShader);
-						// shader.fragmentShader = ModShader;
+		const renderPass = new RenderPass(this.scene, this.camera);
+		this.composer.addPass(renderPass);
 
-						console.log(shader)
-					};
-				}
+		const bloomPass = new UnrealBloomPass(
+			new THREE.Vector2(
+				this.inputElement.clientWidth,
+				this.inputElement.clientHeight,
+			),
+			0.12,
+			0.9,
+			0.1,
+		);
 
-				if (child.isMesh) {
-					child.receiveShadow = false;
-					// Helper function to apply optimal texture settings
-					const optimizeTexture = (texture) => {
-						if (texture) {
-							// texture.minFilter = THREE.LinearFilter;
-							texture.minFilter = THREE.LinearMipmapLinearFilter;
-							texture.magFilter = THREE.LinearFilter;
-							texture.anisotropy = renderer.capabilities
-								.getMaxAnisotropy();
-							// texture.anisotropy = false;
-							texture.generateMipmaps = true;
-						}
-					};
+		this.composer.addPass(bloomPass);
 
-					// Apply to all available texture maps
-					optimizeTexture(child.material.map); // Base color/diffuse map
-					optimizeTexture(child.material.normalMap); // Normal map
-					optimizeTexture(child.material.roughnessMap); // Roughness map
-					optimizeTexture(child.material.metalnessMap); // Metalness map
-				}
-			});
+		const outputPass = new OutputPass();
+		this.composer.addPass(outputPass);
+	}
 
-			// wait until the model can be added to the scene without blocking due to shader compilation
-			await renderer.compileAsync(model, camera, scene);
+	setupInteraction() {
+		this.pickPosition = { x: -2, y: -2 };
+		this.pickHelper = new PickHelper();
+		this.clearPickPosition();
 
-			mixer = new THREE.AnimationMixer(model);
-			const action = mixer.clipAction(gltf.animations[0]);
-			// action.play();
+		this.inputElement.addEventListener(
+			"mousemove",
+			this.setPickPosition.bind(this),
+		);
+		this.inputElement.addEventListener(
+			"mouseout",
+			this.clearPickPosition.bind(this),
+		);
+		this.inputElement.addEventListener(
+			"mouseleave",
+			this.clearPickPosition.bind(this),
+		);
+		this.inputElement.addEventListener("contextmenu", () => {
+			console.log("hi");
+		});
 
-			scene.add(model);
-			requestAnimationFrame(render);
+		this.setupTouchEvents();
+	}
+
+	setupTouchEvents() {
+		this.inputElement.addEventListener("touchstart", (event) => {
+			event.preventDefault();
+			this.setPickPosition(event.touches[0]);
+		}, { passive: false });
+
+		this.inputElement.addEventListener("touchmove", (event) => {
+			this.setPickPosition(event.touches[0]);
+		});
+
+		this.inputElement.addEventListener("touchend", () => {
+			this.clearPickPosition();
 		});
 	}
 
-	{
-		const loader = new HDRJPGLoader(renderer);
-		loader.load(HDRIMAP, function (hdri) {
+	loadAssets() {
+		this.loadArtworkModel();
+		this.loadHDREnvironment();
+	}
+
+	loadArtworkModel() {
+		const loader = new GLTFLoader();
+		loader.load(artworkModelUrl, async (gltf) => {
+			const model = gltf.scene;
+			model.scale.set(1, 1, 1);
+
+			this.optimizeModelTextures(model);
+
+			await this.renderer.compileAsync(model, this.camera, this.scene);
+
+			this.mixer = new THREE.AnimationMixer(model);
+			const action = this.mixer.clipAction(gltf.animations[0]);
+			// Uncomment to play animation
+			// action.play();
+
+			this.scene.add(model);
+			this.startPerformanceSamplingLoop();
+		});
+	}
+
+	optimizeModelTextures(model) {
+		model.traverse((child) => {
+			if (child.isMesh) {
+				//  child.receiveShadow = true;
+				this.applyTextureOptimization(child.material.map);
+				this.applyTextureOptimization(child.material.normalMap);
+				this.applyTextureOptimization(child.material.roughnessMap);
+				this.applyTextureOptimization(child.material.metalnessMap);
+			}
+		});
+	}
+
+	applyTextureOptimization(texture) {
+		if (texture) {
+			texture.minFilter = THREE.LinearMipmapLinearFilter;
+			texture.magFilter = THREE.LinearFilter;
+			texture.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+			texture.generateMipmaps = true;
+		}
+	}
+
+	loadHDREnvironment() {
+		const loader = new HDRJPGLoader(this.renderer);
+		loader.load(HDRIMAP, (hdri) => {
 			const hdrTexture = hdri.renderTarget.texture;
-			// Ensure proper texture settings
-			hdrTexture.type = THREE.HalfFloatType;
-			hdrTexture.minFilter = THREE.LinearMipmapLinearFilter;
-			hdrTexture.magFilter = THREE.LinearFilter;
-			hdrTexture.generateMipmaps = true;
-			hdrTexture.needsUpdate = true;
-
-			//  scene.background = hdrTexture;
-			//  scene.background.mapping = THREE.EquirectangularReflectionMapping;
-			scene.environment = hdrTexture;
-			scene.environment.mapping = THREE.EquirectangularReflectionMapping;
-
-			// Don't forget to dispose of the HDR renderer when you're done
+			console.log(hdri);
+			this.configureHDRTexture(hdrTexture);
+			this.scene.environment = hdrTexture;
+			this.scene.environment.mapping =
+				THREE.EquirectangularReflectionMapping;
 			hdri.dispose();
 		});
 	}
 
-
-	const sizeRenderer = renderer.getDrawingBufferSize( new THREE.Vector2() );
-	const renderTarget = new THREE.WebGLRenderTarget( sizeRenderer.width, sizeRenderer.height, 
-		{ 
-			samples: 8,
-			anisotropy: renderer.capabilities.getMaxAnisotropy(),
-			colorSpace: THREE.LinearSRGBColorSpace,
-			type: THREE.HalfFloatType
-		} 
-	);
-
-	const composer = new EffectComposer( renderer, renderTarget );
-
-	const renderPass = new RenderPass( scene, camera );
-	composer.addPass( renderPass );
-
-	const unrealBloomPass = new UnrealBloomPass(
-		sizeRenderer,
-		0.12,
-		0.9,
-		0.1
-	)
-
-	composer.addPass(unrealBloomPass);
-
-
-	// const copyPass = new ShaderPass( CopyShader )
-	// composer_1.addPass( copyPass )
-	// const smaaRenderPass = new SMAAPass(inputElement.clientWidth, inputElement.clientHeight);
-	// composer_1.addPass( smaaRenderPass )
-
-
-	const outputPass = new OutputPass();
-	composer.addPass( outputPass );
-	
-
-	const boxWidth = 1;
-	const boxHeight = 1;
-	const boxDepth = 1;
-	const geometry = new THREE.BoxGeometry(boxWidth, boxHeight, boxDepth);
-
-	function makeInstance(geometry, color, position) {
-		const material = new THREE.MeshStandardMaterial({
-			color,
-			envMap: scene.environment, // Add environment map
-			metalness: 0.5, // Add some metalness
-			roughness: 0.5, // Add some roughness
-		});
-
-		const cube = new THREE.Mesh(geometry, material);
-		scene.add(cube);
-		cube.position.set(position.x, position.y, position.z);
-		return cube;
+	configureHDRTexture(texture) {
+		texture.type = THREE.HalfFloatType;
+		texture.minFilter = THREE.LinearMipmapLinearFilter;
+		texture.magFilter = THREE.LinearFilter;
+		texture.generateMipmaps = true;
+		texture.needsUpdate = true;
 	}
 
-	/*
-	const cubes = [
-		makeInstance( geometry, 0x44aa88, 0 ),
-		makeInstance( geometry, 0x8844aa, - 2 ),
-		makeInstance( geometry, 0xaa8844, 2 ),
-	];
-   */
+	startPerformanceSamplingLoop() {
+		let prevTime = 0;
+		let frames = 0;
+		const fpsSamples = [];
+		const maxSamples = 3;
 
-	const cubes1 = [
-		() => makeInstance(geometry, 0x44aa88, getRandomPosition()),
-		() => makeInstance(geometry, 0x8844aa, getRandomPosition()),
-		() => makeInstance(geometry, 0xaa8844, getRandomPosition()),
-	];
+		const performanceSample = (time) => {
+			time *= 0.001;
+			const now = Date.now();
 
-	// Helper function to generate random positions
-	function getRandomPosition() {
-		const min = -30;
-		const max = 30;
-		return {
-			x: Math.random() * (max - min) + min,
-			y: Math.random() * (max - min) + min,
-			z: Math.random() * (max - min) * 1 + min - 40,
+			this.handleResize(now);
+			this.updateScene(time, now);
+
+			this.composer.render();
+
+			// Increment the frame counter
+			frames++;
+
+			// Collect FPS samples for the first 400 milliseconds
+			if (time >= prevTime + 0.1) { // 0.1 second has passed
+				const fps = frames / (time - prevTime);
+				fpsSamples.push(fps);
+
+				prevTime = time;
+				frames = 0;
+
+				// If we have collected 4 samples, evaluate performance
+				if (fpsSamples.length >= maxSamples) {
+					const maxFPS = Math.max(...fpsSamples);
+					const targetFPS = 75;
+
+					console.log(maxFPS);
+
+					if (maxFPS > 50) {
+						this.startRenderLoop();
+						return
+					} 
+					
+					// Calculate the ratio of FPS increase needed
+					const fpsRatio = maxFPS / targetFPS;
+
+					// Calculate the new pixel ratio
+					const potentialPixelRatio = Math.sqrt(this.initialPixelRatio ** 1 * fpsRatio);
+
+					this.customPixelRatio = Math.max(
+						0.8,
+						Math.min(potentialPixelRatio, this.initialPixelRatio),
+					);
+					console.log(potentialPixelRatio);
+					this.startRenderLoop();
+
+					return;
+				}
+			}
+
+			requestAnimationFrame(performanceSample);
 		};
+
+		requestAnimationFrame(performanceSample);
 	}
 
-	// Number of times to duplicate
-	const timesToDuplicate = 100;
+	startRenderLoop() {
+		const render = (time) => {
+			time *= 0.001;
+			const now = Date.now();
 
-	/*
-   // Create the cubes array by executing makeInstance for eac copy
-   const cubes = [];
-   for (let i = 0; i < timesToDuplicate; i++) {
-         for (const instance of cubes1) {
-            cubes.push(instance()); // Call each function in cubes1
-         }
-   }
-			*/
+			this.handleResize(now);
+			this.updateScene(time, now);
 
-	class PickHelper {
-		constructor() {
-			this.raycaster = new THREE.Raycaster();
-			this.pickedObject = null;
-			this.pickedObjectSavedColor = 0;
-		}
-		pick(normalizedPosition, scene, camera, time) {
-			// restore the color if there is a picked object
-			if (this.pickedObject) {
-				this.pickedObject.material.emissive.setHex(
-					this.pickedObjectSavedColor,
-				);
-				this.pickedObject = undefined;
-			}
+			this.composer.render();
 
-			// cast a ray through the frustum
-			this.raycaster.setFromCamera(normalizedPosition, camera);
-			// get the list of objects the ray intersected
-			const intersectedObjects = this.raycaster.intersectObjects(
-				scene.children,
-			);
-			if (intersectedObjects.length) {
-				// pick the first object. It's the closest one
-				this.pickedObject = intersectedObjects[0].object;
-				// save its color
-				this.pickedObjectSavedColor = this.pickedObject.material.emissive
-					.getHex();
-				// set its emissive color to flashing red/yellow
-				this.pickedObject.material.emissive.setHex(
-					(time * 8) % 2 > 1 ? 0xFFFF00 : 0xFF0000,
-				);
-			}
-		}
-	}
-
-	const pickPosition = { x: -2, y: -2 };
-	const pickHelper = new PickHelper();
-	clearPickPosition();
-	let lastResizeTime = 0;
-
-	function resizeRendererToDisplaySize(renderer, now) {
-		if (now - lastResizeTime < 150) return false;
-		const canvas = renderer.domElement;
-		const width = inputElement.clientWidth;
-		const height = inputElement.clientHeight;
-		const needResize = canvas.width !== Math.floor(width * pixelRatio) || canvas.height !== Math.floor(height * pixelRatio);
-		if (needResize) {
-			lastResizeTime = now;
-			renderer.setSize(width, height, false);
-			renderTarget.setSize(width, height, false);
-			composer.setSize(width, height); // Add this line
-			renderPass.setSize(width, height);
-			unrealBloomPass.resolution.set(width, height); // Update UnrealBloomPass resolution
-		}
-
-		return needResize;
-	}
-
-	function render(time) {
-		time *= 0.001;
-		const now = Date.now();
-
-		if (resizeRendererToDisplaySize(renderer, now)) {
-			camera.aspect = inputElement.clientWidth / inputElement.clientHeight;
-			camera.updateProjectionMatrix();
-		}
-
-		/*
-		cubes.forEach( ( cube, ndx ) => {
-
-			const speed = 1 + ndx * .0001;
-			const rot = time * speed;
-			cube.rotation.x = rot;
-			cube.rotation.y = rot;
-
-		} );
-		 */
-		// https://raw.githubusercontent.com/Arecsu/model-viewer/monk/packages/shared-assets/environments/old_bus_depot_2k_HDR.jpg
-		// pickHelper.pick( pickPosition, scene, camera, time );
-
-		dt = (now - lastframe) / 1000;
-		if (mixer) mixer.update(dt);
-
-		controls.update();
-
-		// renderer.render(scene, camera);
-		composer.render();
-
-		lastframe = now;
-
+			requestAnimationFrame(render);
+		};
 		requestAnimationFrame(render);
 	}
 
-	function getCanvasRelativePosition(event) {
-		const rect = inputElement.getBoundingClientRect();
+	handleResize(now) {
+		const { clientWidth: width, clientHeight: height, pixelRatio } =
+			this.inputElement;
+		const pixelRatioE = this.customPixelRatio || pixelRatio ||
+			this.initialPixelRatio || window.devicePixelRatio;
+
+		if (this.needsResize(now, width, height, pixelRatioE)) {
+			this.updateRendererSize(width, height, pixelRatioE);
+			this.lastResizeTime = now;
+			this.camera.aspect = width / height;
+			this.camera.updateProjectionMatrix();
+		}
+	}
+
+	needsResize(now, width, height, pixelRatioE) {
+		if (now - this.lastResizeTime < this.throttleResize) return false;
+
+		const canvas = this.renderer.domElement;
+		return (
+			canvas.width !== Math.floor(width * pixelRatioE) ||
+			canvas.height !== Math.floor(height * pixelRatioE) ||
+			pixelRatioE !== this.renderer.getPixelRatio()
+		);
+	}
+
+	updateRendererSize(width, height, pixelRatioE) {
+		this.renderer.setPixelRatio(pixelRatioE || 1);
+		this.renderer.setSize(width, height, false);
+		this.composer.setPixelRatio(this.renderer.getPixelRatio());
+		this.composer.setSize(width, height);
+	}
+
+	updateScene(time, now) {
+		const dt = (now - this.lastFrame) / 1000;
+		if (this.mixer) this.mixer.update(dt);
+		this.controls.update();
+		this.lastFrame = now;
+	}
+
+	getCanvasRelativePosition(event) {
+		const rect = this.inputElement.getBoundingClientRect();
 		return {
 			x: event.clientX - rect.left,
 			y: event.clientY - rect.top,
 		};
 	}
 
-	function setPickPosition(event) {
-		const pos = getCanvasRelativePosition(event);
-		pickPosition.x = (pos.x / inputElement.clientWidth) * 2 - 1;
-		pickPosition.y = (pos.y / inputElement.clientHeight) * -2 + 1; // note we flip Y
+	setPickPosition(event) {
+		const pos = this.getCanvasRelativePosition(event);
+		this.pickPosition.x = (pos.x / this.inputElement.clientWidth) * 2 - 1;
+		this.pickPosition.y = (pos.y / this.inputElement.clientHeight) * -2 + 1;
 	}
 
-	function clearPickPosition() {
-		// unlike the mouse which always has a position
-		// if the user stops touching the screen we want
-		// to stop picking. For now we just pick a value
-		// unlikely to pick something
-		pickPosition.x = -100000;
-		pickPosition.y = -100000;
+	clearPickPosition() {
+		this.pickPosition.x = -100000;
+		this.pickPosition.y = -100000;
+	}
+}
+
+// Utility class for object picking
+class PickHelper {
+	constructor() {
+		this.raycaster = new THREE.Raycaster();
+		this.pickedObject = null;
+		this.pickedObjectSavedColor = 0;
 	}
 
-	inputElement.addEventListener("mousemove", setPickPosition);
-	inputElement.addEventListener("mouseout", clearPickPosition);
-	inputElement.addEventListener("mouseleave", clearPickPosition);
+	pick(normalizedPosition, scene, camera, time) {
+		// Restore previous picked object color
+		if (this.pickedObject) {
+			this.pickedObject.material.emissive.setHex(
+				this.pickedObjectSavedColor,
+			);
+			this.pickedObject = undefined;
+		}
 
-	inputElement.addEventListener("touchstart", (event) => {
-		// prevent the window from scrolling
-		event.preventDefault();
-		// inputElement.style.touchAction = 'auto'; // disable touch scroll
-		setPickPosition(event.touches[0]);
-	}, { passive: false });
+		// Raycast and find intersected objects
+		this.raycaster.setFromCamera(normalizedPosition, camera);
+		const intersectedObjects = this.raycaster.intersectObjects(
+			scene.children,
+		);
 
-	inputElement.addEventListener("touchmove", (event) => {
-		setPickPosition(event.touches[0]);
-	});
+		if (intersectedObjects.length) {
+			this.pickedObject = intersectedObjects[0].object;
+			this.pickedObjectSavedColor = this.pickedObject.material.emissive
+				.getHex();
 
-	inputElement.addEventListener("touchend", (event) => {
-		// inputElement.style.touchAction = 'auto';
-		clearPickPosition();
-	});
+			// Flashing effect for picked object
+			this.pickedObject.material.emissive.setHex(
+				(time * 8) % 2 > 1 ? 0xFFFF00 : 0xFF0000,
+			);
+		}
+	}
+}
+
+// Initialization function
+export function init(data) {
+	return new ThreeSceneManager(data);
 }
