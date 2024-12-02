@@ -53,6 +53,7 @@ class ElementProxyReceiver extends EventDispatcher {
 			this.top = data.top;
 			this.width = data.width;
 			this.height = data.height;
+			this.pixelRatio = data.pixelRatio;
 			return;
 
 		}
