@@ -13,12 +13,27 @@ import { FXAAShader } from "three/addons/shaders/FXAAShader.js";
 import artworkModelUrl from "./McLovin-1024x.glb?url";
 import HDRIMAP from "./old_bus_depot_2k_HDR.jpg?url";
 
+function median(numbers) {
+	const sorted = Array.from(numbers).sort((a, b) => a - b);
+	const middle = Math.floor(sorted.length / 2);
+
+	if (sorted.length % 2 === 0) {
+		 return (sorted[middle - 1] + sorted[middle]) / 2;
+	}
+
+	return sorted[middle];
+}
+
+const getAverage = (array) =>
+	array.reduce((sum, currentValue) => sum + currentValue, 0) / array.length;
+
 class ThreeSceneManager {
 	constructor(data) {
 		this.canvas = data.canvas;
 		this.inputElement = data.inputElement;
 		this.initialPixelRatio = data.pixelRatio || window.devicePixelRatio;
 		this.customPixelRatio = null;
+		this.msaaSamples = 4;
 
 		this.scene = null;
 		this.camera = null;
@@ -87,7 +102,7 @@ class ThreeSceneManager {
 			this.inputElement.clientWidth,
 			this.inputElement.clientHeight,
 			{
-				samples: 8,
+				samples: this.msaaSamples,
 				anisotropy: this.renderer.capabilities.getMaxAnisotropy(),
 				colorSpace: THREE.LinearSRGBColorSpace,
 				type: THREE.HalfFloatType,
@@ -113,6 +128,13 @@ class ThreeSceneManager {
 
 		const outputPass = new OutputPass();
 		this.composer.addPass(outputPass);
+	}
+
+	resetPostProcessing() {
+		this.composer.dispose();
+		this.composer = null;
+		this.setupPostProcessing();
+		this.handleResize(true);
 	}
 
 	setupInteraction() {
@@ -204,7 +226,6 @@ class ThreeSceneManager {
 		const loader = new HDRJPGLoader(this.renderer);
 		loader.load(HDRIMAP, (hdri) => {
 			const hdrTexture = hdri.renderTarget.texture;
-			console.log(hdri);
 			this.configureHDRTexture(hdrTexture);
 			this.scene.environment = hdrTexture;
 			this.scene.environment.mapping =
@@ -225,13 +246,13 @@ class ThreeSceneManager {
 		let prevTime = 0;
 		let frames = 0;
 		const fpsSamples = [];
-		const maxSamples = 3;
+		const maxSamples = 5;
 
 		const performanceSample = (time) => {
 			time *= 0.001;
 			const now = Date.now();
 
-			this.handleResize(now);
+			this.handleResize();
 			this.updateScene(time, now);
 
 			this.composer.render();
@@ -247,29 +268,34 @@ class ThreeSceneManager {
 				prevTime = time;
 				frames = 0;
 
-				// If we have collected 4 samples, evaluate performance
+				// If we have collected 5 samples, evaluate performance
 				if (fpsSamples.length >= maxSamples) {
-					const maxFPS = Math.max(...fpsSamples);
+					// const maxFPS = Math.max(...fpsSamples);
+					// const maxFPS = median(fpsSamples.slice(3, -1));
+					const maxFPS = getAverage(fpsSamples.slice(3));
 					const targetFPS = 75;
 
 					console.log(maxFPS);
 
-					if (maxFPS > 50) {
-						this.startRenderLoop();
-						return
-					} 
-					
-					// Calculate the ratio of FPS increase needed
-					const fpsRatio = maxFPS / targetFPS;
+					if (maxFPS < 50) {
+						this.msaaSamples = 0;
+						this.resetPostProcessing();
+					}
 
-					// Calculate the new pixel ratio
-					const potentialPixelRatio = Math.sqrt(this.initialPixelRatio ** 1 * fpsRatio);
+					if (maxFPS < 30) {
+						// Calculate the ratio of FPS increase needed
+						const fpsRatio = maxFPS / targetFPS;
 
-					this.customPixelRatio = Math.max(
-						0.8,
-						Math.min(potentialPixelRatio, this.initialPixelRatio),
-					);
-					console.log(potentialPixelRatio);
+						// Calculate the new pixel ratio
+						const potentialPixelRatio = Math.sqrt(this.initialPixelRatio ** 2.4 * fpsRatio);
+
+						this.customPixelRatio = Math.max(
+							0.8,
+							Math.min(potentialPixelRatio, this.initialPixelRatio),
+						);
+						console.log(potentialPixelRatio);
+					}
+
 					this.startRenderLoop();
 
 					return;
@@ -287,7 +313,7 @@ class ThreeSceneManager {
 			time *= 0.001;
 			const now = Date.now();
 
-			this.handleResize(now);
+			this.handleResize();
 			this.updateScene(time, now);
 
 			this.composer.render();
@@ -297,13 +323,14 @@ class ThreeSceneManager {
 		requestAnimationFrame(render);
 	}
 
-	handleResize(now) {
+	handleResize(forceResize = false) {
 		const { clientWidth: width, clientHeight: height, pixelRatio } =
 			this.inputElement;
 		const pixelRatioE = this.customPixelRatio || pixelRatio ||
 			this.initialPixelRatio || window.devicePixelRatio;
+		const now = Date.now();
 
-		if (this.needsResize(now, width, height, pixelRatioE)) {
+		if (forceResize || this.needsResize(now, width, height, pixelRatioE)) {
 			this.updateRendererSize(width, height, pixelRatioE);
 			this.lastResizeTime = now;
 			this.camera.aspect = width / height;
@@ -315,7 +342,7 @@ class ThreeSceneManager {
 		if (now - this.lastResizeTime < this.throttleResize) return false;
 
 		const canvas = this.renderer.domElement;
-		return (
+		return ( 
 			canvas.width !== Math.floor(width * pixelRatioE) ||
 			canvas.height !== Math.floor(height * pixelRatioE) ||
 			pixelRatioE !== this.renderer.getPixelRatio()
