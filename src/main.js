@@ -161,13 +161,29 @@ class ElementProxy {
   }
 }
 
-function isFirefoxForAndroid() {
+function getLowPerformanceSettings() {
+  const firefoxMacintoshRegex = /Macintosh(?!.*KHTML).*Gecko/i;
   const firefoxAndroidRegex = /Android(?!.*KHTML).*Gecko/i;
-  return firefoxAndroidRegex.test(navigator.userAgent);
+
+  if (firefoxMacintoshRegex.test(navigator.userAgent)) {
+    return {
+      disableMSAA: true,
+      lowResolution: false
+    }
+  }
+
+  if (firefoxAndroidRegex.test(navigator.userAgent)) {
+    return {
+      disableMSAA: true,
+      lowResolution: true
+    }
+  }
+
+  return null;
 }
 
 
-function startWorker(canvas, lowPerformanceMode = false) {
+function startWorker(canvas, lowPerformanceSettings) {
   // canvas.focus();
   const offscreen = canvas.transferControlToOffscreen();
   const worker = new Worker(
@@ -195,26 +211,26 @@ function startWorker(canvas, lowPerformanceMode = false) {
     canvas: offscreen,
     canvasId: proxy.id,
     pixelRatio: pixelRatio,
-    lowPerformanceMode: lowPerformanceMode,
+    lowPerformanceSettings
   }, [offscreen]);
   console.log("using OffscreenCanvas"); /* eslint-disable-line no-console */
 }
 
-function startMainPage(canvas, disableMSAA = false) {
-  init({ canvas, inputElement: canvas, pixelRatio: window.devicePixelRatio, lowPerformanceMode });
+function startMainPage(canvas, lowPerformanceSettings) {
+  init({ canvas, inputElement: canvas, pixelRatio: window.devicePixelRatio, lowPerformanceSettings });
   console.log("using regular canvas"); /* eslint-disable-line no-console */
 }
 
 function main() {
   /* eslint consistent-return: 0 */
 
-  const lowPerformanceMode = isFirefoxForAndroid(); // workaround, performs poorly with MSAA
+  const lowPerformanceSettings = getLowPerformanceSettings();
 
   const canvas = document.querySelector("#c");
   if (canvas.transferControlToOffscreen) {
-    startWorker(canvas, lowPerformanceMode);
+    startWorker(canvas, lowPerformanceSettings);
   } else {
-    startMainPage(canvas, lowPerformanceMode);
+    startMainPage(canvas, lowPerformanceSettings);
   }
 }
 

@@ -31,11 +31,14 @@ class ThreeSceneManager {
 	constructor(data) {
 		this.canvas = data.canvas;
 		this.inputElement = data.inputElement;
-		this.lowPerformanceMode = data.lowPerformanceMode;
-		this.baseLoadPixelRatio = data.pixelRatio || window.devicePixelRatio;
-		this.initialRenderPixelRatio = this.lowPerformanceMode ? data.pixelRatio / 2 : this.baseLoadPixelRatio;
+		this.lowPerformanceSettings = {
+			 disableMSAA: data.lowPerformanceSettings?.disableMSAA ?? false,
+			 lowResolution: data.lowPerformanceSettings?.lowResolution ?? false
+		};
+		this.baseLoadPixelRatio = data.pixelRatio ?? window.devicePixelRatio;
+		this.initialRenderPixelRatio = this.lowPerformanceSettings.lowResolution ? data.pixelRatio / 2 : this.baseLoadPixelRatio;
 		this.performantRenderPixelRatio = null;
-		this.msaaSamples = this.lowPerformanceMode ? 0 : 4;
+		this.msaaSamples = this.lowPerformanceSettings.disableMSAA ? 0 : 4;
 
 		this.pixelRatioVariation = 1; // this to handle screen DPI changes
 

@@ -108,7 +108,7 @@ function start( data ) {
 		canvas: data.canvas,
 		inputElement: proxy,
 		pixelRatio: data.pixelRatio,
-		lowPerformanceMode: data.lowPerformanceMode
+		lowPerformanceSettings: data.lowPerformanceSettings
 	} );
 
 }
