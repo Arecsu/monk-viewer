@@ -17,33 +17,33 @@ class ElementProxy {
     this.id = ElementProxy.nextId++;
     this.worker = worker;
     this.element = element;
-
+  
     const sendEvent = (data: EventPayload) => {
       this.worker.postMessage({ type: "event", id: this.id, data });
     };
-
+  
     this.worker.postMessage({ type: "makeProxy", id: this.id });
-
+  
+    const sendSize = () => {
+      const rect = this.element.getBoundingClientRect();
+      sendEvent({
+        type: "size",
+        left: rect.left,
+        top: rect.top,
+        width: this.element.clientWidth,
+        height: this.element.clientHeight,
+        pixelRatio: window.devicePixelRatio || 1,
+      });
+    };
+  
     this.resizeObserver = new ResizeObserver(() => {
-      requestAnimationFrame(() => this.sendSize(sendEvent));
+      requestAnimationFrame(sendSize);
     });
-
-    this.sendSize(sendEvent);
+  
+    sendSize();
     this.resizeObserver.observe(element);
-
+  
     this.attachHandlers(handlers, sendEvent);
-  }
-
-  private sendSize(sendEvent: (data: EventPayload) => void): void {
-    const rect = this.element.getBoundingClientRect();
-    sendEvent({
-      type: "size",
-      left: rect.left,
-      top: rect.top,
-      width: this.element.clientWidth,
-      height: this.element.clientHeight,
-      pixelRatio: window.devicePixelRatio || 1,
-    });
   }
 
   private attachHandlers(handlers: Record<string, (event: Event) => EventPayload>, sendEvent: (data: EventPayload) => void): void {
