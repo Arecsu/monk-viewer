@@ -1,4 +1,4 @@
-import{m as s,n,o as d,c as h,p as l}from"./vendor-three-boZRr3xs.js";const u={name:"DitheringShader",uniforms:{tDiffuse:{value:null},resolution:{value:new s},ditherIntensity:{value:.5},ditherPattern:{value:0}},vertexShader:`
+import{m as s,n,o as d,c as h,p as l}from"./vendor-three-7acuM1Fa.js";const u={name:"DitheringShader",uniforms:{tDiffuse:{value:null},resolution:{value:new s},ditherIntensity:{value:.5},ditherPattern:{value:0}},vertexShader:`
      varying vec2 vUv;
  
      void main() {
