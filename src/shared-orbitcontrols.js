@@ -9,6 +9,7 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { FXAAShader } from "three/addons/shaders/FXAAShader.js";
 import { DitheringPass } from "./postprocessing/DitheringPass.js";
+import ModShader from "./mod3_meshphysical_complete.glsl?raw"
 
 // Import asset URLs
 import artworkModelUrl from "./McLovin-1024x.glb?url";
@@ -40,6 +41,7 @@ class ThreeSceneManager {
 		this.initialRenderPixelRatio = this.lowPerformanceSettings.lowResolution ? data.pixelRatio / 2 : this.baseLoadPixelRatio;
 		this.performantRenderPixelRatio = null;
 		this.msaaSamples = this.lowPerformanceSettings.disableMSAA ? 0 : 4;
+
 
 		this.pixelRatioVariation = 1; // this to handle screen DPI changes
 
@@ -84,6 +86,7 @@ class ThreeSceneManager {
 	setupCamera() {
 		this.camera = new THREE.PerspectiveCamera(50, 2, 0.1, 100);
 		this.camera.position.z = 0.8;
+		// this.camera.rotation.y = Math.PI * 0.5;
 	}
 
 	setupControls() {
@@ -135,7 +138,6 @@ class ThreeSceneManager {
 		this.composer.addPass(bloomPass);
 
 		const pixelRatio = this.getWorkingPixelRatio();
-
 
 		const outputPass = new OutputPass();
 		this.composer.addPass(outputPass);
@@ -203,7 +205,24 @@ class ThreeSceneManager {
 		const loader = new GLTFLoader();
 		loader.load(artworkModelUrl, async (gltf) => {
 			const model = gltf.scene;
+			// model.rotation.y += 1.2;
+			// model.rotation.x -= 0.3;
+			// model.rotation.z -= 0.1;
 			model.scale.set(1, 1, 1);
+
+			model.traverse((child) => {
+				// console.log(child.material)
+				if (child.material) {
+					// child.material.anisotropy = 1.0
+					child.material.needsUpdate = true
+					child.material.onBeforeCompile = (shader) => {
+						// Inject code into the shader
+						// console.log(shader.fragmentShader);
+						shader.fragmentShader = ModShader;
+						// console.log(shader)
+					};
+				}
+			});
 
 			this.optimizeModelTextures(model);
 
@@ -211,11 +230,11 @@ class ThreeSceneManager {
 
 			this.mixer = new THREE.AnimationMixer(model);
 			const action = this.mixer.clipAction(gltf.animations[0]);
-			// Uncomment to play animation
 			// action.play();
 
 			this.scene.add(model);
 			this.startPerformanceSamplingLoop();
+			// this.startRenderLoop();
 		});
 	}
 
@@ -246,6 +265,7 @@ class ThreeSceneManager {
 			const hdrTexture = hdri.renderTarget.texture;
 			this.configureHDRTexture(hdrTexture);
 			this.scene.environment = hdrTexture;
+			// this.scene.environmentRotation = new THREE.Euler(0, 20, 0);
 			this.scene.environment.mapping =
 				THREE.EquirectangularReflectionMapping;
 			hdri.dispose();
@@ -302,10 +322,7 @@ class ThreeSceneManager {
 					}
 
 					if (maxFPS < 30) {
-						// Calculate the ratio of FPS increase needed
 						const fpsRatio = maxFPS / targetFPS;
-
-						// Calculate the new pixel ratio
 						const potentialPixelRatio = Math.sqrt(this.initialRenderPixelRatio ** 2.6 * fpsRatio);
 
 						this.performantRenderPixelRatio = Math.max(
@@ -363,7 +380,7 @@ class ThreeSceneManager {
 			 return this.initialRenderPixelRatio * this.pixelRatioVariation;
 		}
 		return window.devicePixelRatio;
-	}
+  }
 
 	handleResize(forceResize = false) {
 		const { clientWidth: width, clientHeight: height, pixelRatio } = this.inputElement;
