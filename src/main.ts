@@ -145,11 +145,7 @@ function getLowPerformanceSettings() {
   const isFirefoxMacintosh = /Macintosh(?!.*KHTML).*Gecko/i.test(navigator.userAgent);
   const isFirefoxAndroid = /Android(?!.*KHTML).*Gecko/i.test(navigator.userAgent);
 
-  if (isFirefoxMacintosh) {
-    return { disableMSAA: true, lowResolution: false };
-  }
-
-  if (isFirefoxAndroid) {
+  if (isFirefoxMacintosh || isFirefoxAndroid) {
     return { disableMSAA: true, lowResolution: true };
   }
 
