@@ -8,6 +8,7 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { FXAAShader } from "three/addons/shaders/FXAAShader.js";
+import { DitheringPass } from "./postprocessing/DitheringPass.js";
 
 // Import asset URLs
 import artworkModelUrl from "./McLovin-1024x.glb?url";
@@ -133,8 +134,18 @@ class ThreeSceneManager {
 
 		this.composer.addPass(bloomPass);
 
+		const pixelRatio = this.getWorkingPixelRatio();
+
+
 		const outputPass = new OutputPass();
 		this.composer.addPass(outputPass);
+
+		const ditheringPass = new DitheringPass({
+			ditherIntensity: 1.0,
+			ditherPattern: 0 // 0 for noise-based dithering, 1 for ordered dithering
+		});
+		this.composer.addPass(ditheringPass);
+
 	}
 
 	resetPostProcessing() {
@@ -344,38 +355,43 @@ class ThreeSceneManager {
 		requestAnimationFrame(render);
 	}
 
+	getWorkingPixelRatio() {
+		if (this.performantRenderPixelRatio) {
+			 return this.performantRenderPixelRatio * this.pixelRatioVariation;
+		} 
+		if (this.initialRenderPixelRatio) {
+			 return this.initialRenderPixelRatio * this.pixelRatioVariation;
+		}
+		return window.devicePixelRatio;
+	}
+
 	handleResize(forceResize = false) {
 		const { clientWidth: width, clientHeight: height, pixelRatio } = this.inputElement;
 		this.pixelRatioVariation = (pixelRatio / this.baseLoadPixelRatio) ?? 1;
-		const pixelRatioE = 
-			this.performantRenderPixelRatio 
-				? this.performantRenderPixelRatio * this.pixelRatioVariation
-				: this.initialRenderPixelRatio 
-						? this.initialRenderPixelRatio * this.pixelRatioVariation
-						: window.devicePixelRatio;
+		const workingPixelRatio = this.getWorkingPixelRatio();
 		const now = Date.now();
 
-		if (forceResize || this.needsResize(now, width, height, pixelRatioE)) {
-			this.updateRendererSize(width, height, pixelRatioE);
+		if (forceResize || this.needsResize(now, width, height, workingPixelRatio)) {
+			this.updateRendererSize(width, height, workingPixelRatio);
 			this.lastResizeTime = now;
 			this.camera.aspect = width / height;
 			this.camera.updateProjectionMatrix();
 		}
 	}
 
-	needsResize(now, width, height, pixelRatioE) {
+	needsResize(now, width, height, workingPixelRatio) {
 		if (now - this.lastResizeTime < this.throttleResize) return false;
 
 		const canvas = this.renderer.domElement;
 		return ( 
-			canvas.width !== Math.floor(width * pixelRatioE) ||
-			canvas.height !== Math.floor(height * pixelRatioE) ||
-			pixelRatioE !== this.renderer.getPixelRatio()
+			canvas.width !== Math.floor(width * workingPixelRatio) ||
+			canvas.height !== Math.floor(height * workingPixelRatio) ||
+			workingPixelRatio !== this.renderer.getPixelRatio()
 		);
 	}
 
-	updateRendererSize(width, height, pixelRatioE) {
-		this.renderer.setPixelRatio(pixelRatioE || 1);
+	updateRendererSize(width, height, workingPixelRatio) {
+		this.renderer.setPixelRatio(workingPixelRatio || 1);
 		this.renderer.setSize(width, height, false);
 		this.composer.setPixelRatio(this.renderer.getPixelRatio());
 		this.composer.setSize(width, height);
