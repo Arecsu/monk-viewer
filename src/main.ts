@@ -121,6 +121,7 @@ const createEventHandlers = () => {
     pointerdown:  createHandler<MouseEvent>(mouseEventHandler),
     pointermove:  createHandler<MouseEvent>(mouseEventHandler),
     pointerup:    createHandler<MouseEvent>(mouseEventHandler),
+    pointerout:   createHandler<MouseEvent>(mouseEventHandler),
 
     wheel: createHandler<WheelEvent>((e) => {
       e.preventDefault();

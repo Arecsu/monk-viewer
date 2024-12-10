@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+// import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { OrbitControls } from "./OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { HDRJPGLoader } from "@monogrid/gainmap-js";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
@@ -359,8 +360,8 @@ class ThreeSceneManager {
 					const maxFPS = getAverage(fpsSamples.slice(3));
 					const targetFPS = 75;
 
-					console.log('maxfps: ', maxFPS);
-					console.log('fpssamples: ', fpsSamples);
+					// console.log('maxfps: ', maxFPS);
+					// console.log('fpssamples: ', fpsSamples);
 
 					if (maxFPS < 50 && this.msaaSamples > 0) {
 						this.msaaSamples = 0;
@@ -409,7 +410,7 @@ class ThreeSceneManager {
 
 			if (time >= prevTime + 1) { // 0.1 second has passed
 				const fps = frames / (time - prevTime);
-				console.log(fps)
+				// console.log(fps)
 				prevTime = time;
 				frames = 0;
 			}
