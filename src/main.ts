@@ -109,7 +109,11 @@ const createEventHandlers = () => {
   const touchEventHandler = makeTouchEventHandler();
   
   return {
-    contextmenu:  createHandler<Event>((e) => ({ type: e.type })),
+    // contextmenu:  createHandler<Event>((e) => ({ type: e.type })),
+    contextmenu:  createHandler<Event>((e) => {
+      e.preventDefault()
+      return { type: e.type }
+    }),
     mousedown:    createHandler<MouseEvent>(mouseEventHandler),
     mousemove:    createHandler<MouseEvent>(mouseEventHandler),
     mouseup:      createHandler<MouseEvent>(mouseEventHandler),

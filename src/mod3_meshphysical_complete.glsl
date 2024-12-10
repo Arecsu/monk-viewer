@@ -57,33 +57,10 @@ varying vec3 vViewPosition;
 #define RECIPROCAL_PI 0.3183098861837907
 #define RECIPROCAL_PI2 0.15915494309189535
 #define EPSILON 1e-6
-
-
 #ifndef saturate
 #define saturate( a ) clamp( a, 0.0, 1.0 )
 #endif
 #define whiteComplement( a ) ( 1.0 - saturate( a ) )
-
-#define MINIMUMVARIANCE 0.0005
-
-
-float convertRoughnessToAverageSlope(float roughness) {
-  return roughness * roughness + MINIMUMVARIANCE;
-}
-
-
-vec2 computeAARoughnessFactors(vec3 normal) {
-  vec3 nDfdx = dFdx(normal);
-  vec3 nDfdy = dFdy(normal);
-  float slopeSquare = max(dot(nDfdx, nDfdx), dot(nDfdy, nDfdy));
-
-  float geometricRoughnessFactor = pow(saturate(slopeSquare), 0.333); // Vive analytical
-  float geometricAlphaGFactor = sqrt(slopeSquare) * 0.75; // Adjusted factor
-
-  return vec2(geometricRoughnessFactor, geometricAlphaGFactor);
-}
-
-
 float pow2( const in float x ) { return x*x; }
 vec3 pow2( const in vec3 x ) { return x*x; }
 float pow3( const in float x ) { return x*x*x; }
@@ -103,7 +80,6 @@ highp float rand( const in vec2 uv ) {
     return length( v / maxComponent ) * maxComponent;
   }
 #endif
-
 struct IncidentLight {
   vec3 color;
   vec3 direction;
@@ -539,6 +515,61 @@ float perspectiveDepthToViewZ( const in float depth, const in float near, const 
       return vec3( 0.0 );
     #endif
   }
+
+  // New specular AA filtering
+  // float roughness2 = material.roughness * material.roughness;
+  // vec2 boundingRectangle = abs(dFdx(nonPerturbedNormal.xy)) + abs(dFdy(nonPerturbedNormal.xy));
+  // vec2 variance = SIGMA2 * (boundingRectangle * boundingRectangle);
+  // vec2 kernelRoughness2 = min(2.0 * variance, KAPPA);
+  // float filteredRoughness2 = saturate(roughness2 + kernelRoughness2.x);
+
+  // material.roughness = sqrt(filteredRoughness2);
+  // material.roughness = min(material.roughness, 1.0);
+
+// Specular Anti-Aliasing Roughness Filtering
+
+// float applySpecularAA(float roughness, vec3 normal) {
+//     // Compute roughness squared
+//     float roughness2 = roughness * roughness;
+    
+//     // Compute bounding rectangle of normal derivatives
+//     vec2 boundingRectangle = abs(dFdx(normal.xy)) + abs(dFdy(normal.xy));
+    
+//     // Constants for variance calculation
+//     // SIGMA2 and KAPPA can be adjusted based on desired filtering intensity
+//     const float SIGMA2 = 0.25; // Variance scaling factor
+//     const float KAPPA = 0.20;  // Maximum variance limit
+    
+//     // Calculate variance
+//     vec2 variance = SIGMA2 * (boundingRectangle * boundingRectangle);
+    
+//     // Limit kernel roughness
+//     vec2 kernelRoughness2 = min(2.0 * variance, KAPPA);
+    
+//     // Filter roughness
+//     float filteredRoughness2 = clamp(roughness2 + kernelRoughness2.x, 0.0, 1.0);
+    
+//     // Return filtered roughness
+//     return sqrt(filteredRoughness2);
+// }
+
+// // Updated IBL Radiance function with filtered roughness
+// vec3 getIBLRadiance(const in vec3 viewDir, const in vec3 normal, float roughness) {
+//     // Apply specular anti-aliasing to roughness before use
+//     float filteredRoughness = applySpecularAA(roughness, normal);
+    
+//     #ifdef ENVMAP_TYPE_CUBE_UV
+//         vec3 reflectVec = reflect(-viewDir, normal);
+//         reflectVec = normalize(mix(reflectVec, normal, filteredRoughness * filteredRoughness));
+//         reflectVec = inverseTransformDirection(reflectVec, viewMatrix);
+//         vec4 envMapColor = textureCubeUV(envMap, envMapRotation * reflectVec, filteredRoughness);
+//         return envMapColor.rgb * envMapIntensity;
+//     #else
+//         return vec3(0.0);
+//     #endif
+// }
+
+
   vec3 getIBLRadiance( const in vec3 viewDir, const in vec3 normal, const in float roughness ) {
     #ifdef ENVMAP_TYPE_CUBE_UV
       vec3 reflectVec = reflect( - viewDir, normal );
@@ -692,6 +723,7 @@ float getSpotAttenuation( const in float coneCosine, const in float penumbraCosi
 #endif
 #ifndef FLAT_SHADED
   varying vec3 vNormal;
+  centroid varying vec3 vCentroidNormal;
   #ifdef USE_TANGENT
     varying vec3 vTangent;
     varying vec3 vBitangent;
@@ -923,7 +955,8 @@ void computeMultiscattering( const in vec3 normal, const in vec3 viewDir, const 
   vec3 FssEss = Fr * fab.x + specularF90 * fab.y;
   float Ess = fab.x + fab.y;
   float Ems = 1.0 - Ess;
-  vec3 Favg = Fr + ( 1.0 - Fr ) * 0.047619;  vec3 Fms = FssEss * Favg / ( 1.0 - Ems * Favg );
+  vec3 Favg = Fr + ( 1.0 - Fr ) * 0.047619; 
+  vec3 Fms = FssEss * Favg / ( 1.0 - Ems * Favg );
   singleScatter += FssEss;
   multiScatter += Fms * Ems;
 }
@@ -1466,6 +1499,12 @@ float faceDirection = gl_FrontFacing ? 1.0 : - 1.0;
   vec3 normal = normalize( cross( fdx, fdy ) );
 #else
   vec3 normal = normalize( vNormal );
+  
+  // Add centroid normal correction
+  if (length(vNormal) >= 1.01) {
+    normal = normalize(vCentroidNormal);
+  }
+  
   #ifdef DOUBLE_SIDED
     normal *= faceDirection;
   #endif
@@ -1532,33 +1571,29 @@ vec3 nonPerturbedNormal = normal;
   #endif
   totalEmissiveRadiance *= emissiveColor.rgb;
 #endif
-
-
-
-
 PhysicalMaterial material;
 material.diffuseColor = diffuseColor.rgb * ( 1.0 - metalnessFactor );
-
-
 vec3 dxy = max( abs( dFdx( nonPerturbedNormal ) ), abs( dFdy( nonPerturbedNormal ) ) );
 float geometryRoughness = max( max( dxy.x, dxy.y ), dxy.z );
 
-vec3 normalW = inverseTransformDirection( normal, viewMatrix );
-// vec3 worldNormal = inverseTransformDirection( normal, viewMatrix );
+vec3 vNormalWsDdx = dFdx(nonPerturbedNormal);
+vec3 vNormalWsDdy = dFdy(nonPerturbedNormal);
+float geometricRoughnessFactor = pow(
+    saturate(max(
+        dot(vNormalWsDdx, vNormalWsDdx), 
+        dot(vNormalWsDdy, vNormalWsDdy)
+    )), 
+    0.333
+);
 
-// Add specular AA adjustments
-vec2 AARoughnessFactors = computeAARoughnessFactors(normalW);
-// float alphaG = convertRoughnessToAverageSlope(roughnessFactor);
-
-// float geometryRoughnessAA = AARoughnessFactors.x;
-float alphaG = AARoughnessFactors.y;
-
-
-material.roughness = max( roughnessFactor, 0.0525 );
+material.roughness = max(roughnessFactor, 0.0525);
+material.roughness = max(material.roughness, geometricRoughnessFactor);
 material.roughness += geometryRoughness;
-material.roughness += alphaG;
-// material.roughness = max(alphaG, geometryRoughness);
-material.roughness = min( material.roughness, 1.0 );
+material.roughness = min(material.roughness, 1.0);
+// material.roughness = min(material.roughness, 1.0);
+
+
+
 #ifdef IOR
   material.ior = ior;
   #ifdef USE_SPECULAR
@@ -1581,6 +1616,7 @@ material.roughness = min( material.roughness, 1.0 );
   material.specularColor = mix( vec3( 0.04 ), diffuseColor.rgb, metalnessFactor );
   material.specularF90 = 1.0;
 #endif
+// material.specularF90 = 0.0;
 #ifdef USE_CLEARCOAT
   material.clearcoat = clearcoat;
   material.clearcoatRoughness = clearcoatRoughness;
@@ -1715,12 +1751,9 @@ IncidentLight directLight;
 #endif
 #if defined( USE_ENVMAP ) && defined( RE_IndirectSpecular )
   #ifdef USE_ANISOTROPY
-    float geometricRoughnessAA = max(AARoughnessFactors.x, min(max( roughnessFactor, 0.0525 ), 1.0));
     radiance += getIBLAnisotropyRadiance( geometryViewDir, geometryNormal, material.roughness, material.anisotropyB, material.anisotropy );
   #else
-    float geometricRoughnessAA = max(AARoughnessFactors.x, min(max( roughnessFactor, 0.0525 ), 1.0));
-    radiance += getIBLRadiance( geometryViewDir, geometryNormal, geometricRoughnessAA );
-    // radiance += getIBLRadiance( geometryViewDir, geometryNormal, material.roughness );
+    radiance += getIBLRadiance( geometryViewDir, geometryNormal, material.roughness );
   #endif
   #ifdef USE_CLEARCOAT
     clearcoatRadiance += getIBLRadiance( geometryViewDir, geometryClearcoatNormal, material.clearcoatRoughness );
@@ -1787,10 +1820,6 @@ diffuseColor.a = 1.0;
 diffuseColor.a *= material.transmissionAlpha;
 #endif
 gl_FragColor = vec4( outgoingLight, diffuseColor.a );
-// gl_FragColor = vec4(alphaG, 0.0, 0.0, 1.0); // Use red channel for roughness
-// gl_FragColor = vec4(geometryRoughness, 0.0, 0.0, 1.0); // Use red channel for roughness
-// gl_FragColor = vec4(material.roughness, 0.0, 0.0, 1.0); // Use red channel for roughness
-
 #if defined( TONE_MAPPING )
   gl_FragColor.rgb = toneMapping( gl_FragColor.rgb );
 #endif

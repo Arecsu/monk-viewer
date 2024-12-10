@@ -8,12 +8,18 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { FXAAShader } from "three/addons/shaders/FXAAShader.js";
+import { SMAAPass } from "./postprocessing/SMAAPass.js"
+import { TAARenderPass } from 'three/addons/postprocessing/TAARenderPass.js';
 import { DitheringPass } from "./postprocessing/DitheringPass.js";
 import ModShader from "./mod3_meshphysical_complete.glsl?raw"
+import ModShader2 from "./meshphysical_vertex.glsl?raw"
 
-// Import asset URLs
-import artworkModelUrl from "./McLovin-1024x.glb?url";
+// import artworkModelUrl from "./McLovin-1024x.glb?url";
+import artworkModelUrl from "./McLovin-1024x-2.glb?url";
+// import artworkModelUrl from "./McLovin-1024x-bevel.glb?url";
 import HDRIMAP from "./old_bus_depot_2k_HDR.jpg?url";
+// import HDRIMAP from "./hanger_exterior_cloudy_4k.jpg?url";
+
 
 function median(numbers) {
 	const sorted = Array.from(numbers).sort((a, b) => a - b);
@@ -40,8 +46,9 @@ class ThreeSceneManager {
 		this.baseLoadPixelRatio = data.pixelRatio ?? window.devicePixelRatio;
 		this.initialRenderPixelRatio = this.lowPerformanceSettings.lowResolution ? data.pixelRatio / 2 : this.baseLoadPixelRatio;
 		this.performantRenderPixelRatio = null;
-		this.msaaSamples = this.lowPerformanceSettings.disableMSAA ? 0 : 4;
+		this.msaaSamples = this.lowPerformanceSettings.disableMSAA ? 0 : 0;
 
+		this.taaRenderPass = null;
 
 		this.pixelRatioVariation = 1; // this to handle screen DPI changes
 
@@ -57,6 +64,7 @@ class ThreeSceneManager {
 
 		this.lastFrame = Date.now();
 		this.initScene();
+
 	}
 
 	initScene() {
@@ -75,11 +83,15 @@ class ThreeSceneManager {
 			powerPreference: "high-performance",
 			antialias: true,
 			canvas: this.canvas,
+			stencil: true,
 		});
 
 		this.renderer.setPixelRatio(this.initialRenderPixelRatio);
 		this.renderer.toneMapping = THREE.ReinhardToneMapping;
-		//   this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+		// this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+	// this.renderer.toneMapping = THREE.CineonToneMapping;
+	// this.renderer.toneMapping = THREE.NeutralToneMapping;
+	// this.renderer.toneMapping = THREE.AgXToneMapping;
 		this.renderer.toneMappingExposure = 1.5;
 	}
 
@@ -100,6 +112,7 @@ class ThreeSceneManager {
 	setupScene() {
 		this.scene = new THREE.Scene();
 		this.scene.background = new THREE.Color(0x000000);
+		// this.scene.background = new THREE.Color(0xFFFFFF);
 	}
 
 	setupLighting() {
@@ -116,6 +129,7 @@ class ThreeSceneManager {
 				samples: this.msaaSamples,
 				anisotropy: this.renderer.capabilities.getMaxAnisotropy(),
 				colorSpace: THREE.LinearSRGBColorSpace,
+				// type: THREE.UnsignedByteType,
 				type: THREE.HalfFloatType,
 			},
 		);
@@ -135,12 +149,28 @@ class ThreeSceneManager {
 			0.1,
 		);
 
-		this.composer.addPass(bloomPass);
-
 		const pixelRatio = this.getWorkingPixelRatio();
+
+
+
+
+		this.taaRenderPass = new TAARenderPass( this.scene, this.camera );
+		this.taaRenderPass.unbiased = false;
+		this.taaRenderPass.sampleLevel = 3;
+		this.composer.addPass( this.taaRenderPass );
+
+		
+		// this.composer.addPass(bloomPass);
+
+
 
 		const outputPass = new OutputPass();
 		this.composer.addPass(outputPass);
+
+
+		
+
+
 
 		const ditheringPass = new DitheringPass({
 			ditherIntensity: 1.0,
@@ -205,9 +235,9 @@ class ThreeSceneManager {
 		const loader = new GLTFLoader();
 		loader.load(artworkModelUrl, async (gltf) => {
 			const model = gltf.scene;
-			// model.rotation.y += 1.2;
-			// model.rotation.x -= 0.3;
-			// model.rotation.z -= 0.1;
+			// model.rotation.y -= 0.6;
+			// model.rotation.x += 0.25;
+			// model.rotation.z -= 0.4;
 			model.scale.set(1, 1, 1);
 
 			model.traverse((child) => {
@@ -218,7 +248,18 @@ class ThreeSceneManager {
 					child.material.onBeforeCompile = (shader) => {
 						// Inject code into the shader
 						// console.log(shader.fragmentShader);
-						shader.fragmentShader = ModShader;
+						// shader.vertexShader = ModShader2;
+						// shader.fragmentShader = ModShader;
+						
+						// shader.fragmentShader = shader.fragmentShader.replace(
+							// `vec3 totalSpecular = reflectedLight.directSpecular + reflectedLight.indirectSpecular;`,
+							// `vec3 totalSpecular = a reflectedLight.directSpecular + reflectedLight.indirectSpecular;`,
+						// );
+						// shader.fragmentShader = shader.vertexShader.replace(
+							// `varying vec3 vViewPosition;`,
+							// `vvarying vec3 vViewPosition;`,
+						// );
+
 						// console.log(shader)
 					};
 				}
@@ -264,8 +305,12 @@ class ThreeSceneManager {
 		loader.load(HDRIMAP, (hdri) => {
 			const hdrTexture = hdri.renderTarget.texture;
 			this.configureHDRTexture(hdrTexture);
+			// this.scene.background = hdrTexture
+			// this.scene.backgroundBlurriness = 0.8
+			// this.scene.backgroundIntensity = 0.4
 			this.scene.environment = hdrTexture;
-			// this.scene.environmentRotation = new THREE.Euler(0, 20, 0);
+			// this.scene.environmentRotation = new THREE.Euler(0.0, -2.37, 0.0);
+			// this.scene.environmentRotation = new THREE.Euler(-5.045, -2.37, 1.0);
 			this.scene.environment.mapping =
 				THREE.EquirectangularReflectionMapping;
 			hdri.dispose();
@@ -293,6 +338,7 @@ class ThreeSceneManager {
 			this.handleResize();
 			this.updateScene(time, now);
 
+			// this.renderer.render(this.scene, this.camera);
 			this.composer.render();
 
 			// Increment the frame counter
@@ -318,12 +364,18 @@ class ThreeSceneManager {
 
 					if (maxFPS < 50 && this.msaaSamples > 0) {
 						this.msaaSamples = 0;
+						this.taaRenderPass.sampleLevel = 0;
 						this.resetPostProcessing();
 					}
 
+					if (maxFPS < 50) {
+						this.taaRenderPass.sampleLevel = 0;
+					}
+
+
 					if (maxFPS < 30) {
 						const fpsRatio = maxFPS / targetFPS;
-						const potentialPixelRatio = Math.sqrt(this.initialRenderPixelRatio ** 2.6 * fpsRatio);
+						const potentialPixelRatio = Math.sqrt(this.initialRenderPixelRatio ** 2.8 * fpsRatio);
 
 						this.performantRenderPixelRatio = Math.max(
 							0.8,
@@ -365,6 +417,7 @@ class ThreeSceneManager {
 			this.handleResize();
 			this.updateScene(time, now);
 
+			// this.renderer.render(this.scene, this.camera);
 			this.composer.render();
 
 			requestAnimationFrame(render);
