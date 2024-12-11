@@ -2,13 +2,13 @@ html, body {
   height: 100%;
   margin: 0;
 }
-#c {
+#c, #c canvas {
   width: 100%;
   height: 100%;
   display: block;
   touch-action: none;
 }
-#c:focus {
+#c canvas:focus {
   outline: none;
 }
 

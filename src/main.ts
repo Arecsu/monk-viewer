@@ -157,36 +157,80 @@ function getLowPerformanceSettings() {
   return { disableMSAA: false, lowResolution: false };
 }
 
-function startWorker(canvas: HTMLCanvasElement): void {
-  const offscreen = canvas.transferControlToOffscreen();
-  const worker = new Worker(
-    new URL("./offscreencanvas-worker-orbitcontrol.js", import.meta.url),
-    { type: "module" }
-  );
+// main();
 
-  const proxy = new ElementProxy(canvas, worker, createEventHandlers());
 
-  worker.postMessage({
-    type: "start",
-    canvas: offscreen,
-    canvasId: proxy.id,
+
+class MonkView extends HTMLElement {
+  private canvas: HTMLCanvasElement;
+  private modelUrl: string;
+  private maxZoom: number;
+  private minZoom: number;
+  private envmapUrl: string;
+
+  // Define common options as a static property
+  private commonOptions = {
     pixelRatio: window.devicePixelRatio || 1,
+    model: "",
+    envmap: "",
     lowPerformanceSettings: getLowPerformanceSettings(),
-  }, [offscreen]);
+  };
+
+  constructor() {
+    super();
+    this.canvas = document.createElement("canvas");
+    this.modelUrl = this.getAttribute("model") || "";
+    this.maxZoom = parseFloat(this.getAttribute("max-zoom") || "1.0");
+    this.minZoom = parseFloat(this.getAttribute("min-zoom") || "0.1");
+    this.envmapUrl = this.getAttribute("envmap") || "";
+
+    this.commonOptions.model = this.getAttribute("model") || "";
+    this.commonOptions.envmap = this.getAttribute("envmap") || "";
+  }
+
+  connectedCallback(): void {
+    this.appendChild(this.canvas);
+    this.logAttributes();
+    this.initScene();
+  }
+
+  logAttributes(): void {
+    console.log("Model URL:", this.modelUrl);
+    console.log("Max Zoom:", this.maxZoom);
+    console.log("Min Zoom:", this.minZoom);
+    console.log("Envmap URL:", this.envmapUrl);
+  }
+
+  startWorker(canvas: HTMLCanvasElement): void {
+    console.log(canvas)
+    const offscreen = canvas.transferControlToOffscreen();
+    const worker = new Worker(
+      new URL("./offscreencanvas-worker-orbitcontrol.js", import.meta.url),
+      { type: "module" }
+    );
+
+    const proxy = new ElementProxy(canvas, worker, createEventHandlers());
+
+    worker.postMessage({
+      type: "start",
+      canvas: offscreen,
+      canvasId: proxy.id,
+      ...this.commonOptions,
+    }, [offscreen]);
+  }
+
+  initScene(): void {
+    if (!this.canvas) return;
+
+    this.canvas.transferControlToOffscreen !== undefined 
+      ? this.startWorker(this.canvas)
+      : init({ 
+        canvas: this.canvas, 
+        inputElement: this.canvas, 
+        ...this.commonOptions,
+      });
+  }
+
 }
 
-function main(): void {
-  const canvas = document.querySelector<HTMLCanvasElement>("#c");
-  if (!canvas) return;
-
-  canvas.transferControlToOffscreen !== undefined 
-    ? startWorker(canvas)
-    : init({ 
-      canvas, 
-      inputElement: canvas, 
-      pixelRatio: window.devicePixelRatio, 
-      lowPerformanceSettings: getLowPerformanceSettings() 
-    });
-}
-
-main();
+customElements.define("monk-view", MonkView);
