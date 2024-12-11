@@ -40,6 +40,8 @@ class ThreeSceneManager {
 	constructor(data) {
 		this.canvas = data.canvas;
 		this.inputElement = data.inputElement;
+		this.model = data.model;
+		this.envmap = data.envmap;
 		this.lowPerformanceSettings = {
 			 disableMSAA: data.lowPerformanceSettings?.disableMSAA ?? false,
 			 lowResolution: data.lowPerformanceSettings?.lowResolution ?? false

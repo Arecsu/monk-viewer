@@ -108,6 +108,8 @@ function start( data ) {
 		canvas: data.canvas,
 		inputElement: proxy,
 		pixelRatio: data.pixelRatio,
+		model: data.model,
+		envmap: data.envmap,
 		lowPerformanceSettings: data.lowPerformanceSettings
 	} );
 
