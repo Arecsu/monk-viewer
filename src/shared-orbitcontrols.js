@@ -43,13 +43,17 @@ class ThreeSceneManager {
 		this.model = data.model;
 		this.envmap = data.envmap;
 		this.lowPerformanceSettings = {
-			 disableMSAA: data.lowPerformanceSettings?.disableMSAA ?? false,
+			 disableAA: data.lowPerformanceSettings?.disableAA ?? false,
 			 lowResolution: data.lowPerformanceSettings?.lowResolution ?? false
 		};
 		this.baseLoadPixelRatio = data.pixelRatio ?? window.devicePixelRatio;
 		this.initialRenderPixelRatio = this.lowPerformanceSettings.lowResolution ? data.pixelRatio / 2 : this.baseLoadPixelRatio;
 		this.performantRenderPixelRatio = null;
-		this.msaaSamples = this.lowPerformanceSettings.disableMSAA ? 0 : 0;
+		// this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 4;
+		// disable msaa because we have taa
+		this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 2;
+		this.taaSamples = 2;
+		this.taaEnable = !this.disableAA;
 
 		this.taaRenderPass = null;
 
@@ -159,13 +163,10 @@ class ThreeSceneManager {
 
 		this.taaRenderPass = new TAARenderPass( this.scene, this.camera );
 		this.taaRenderPass.unbiased = false;
-		this.taaRenderPass.sampleLevel = 3;
-		this.composer.addPass( this.taaRenderPass );
-
+		this.taaRenderPass.sampleLevel = this.taaSamples;
+		this.taaEnable && this.composer.addPass(this.taaRenderPass);
 		
 		// this.composer.addPass(bloomPass);
-
-
 
 		const outputPass = new OutputPass();
 		this.composer.addPass(outputPass);
@@ -365,20 +366,15 @@ class ThreeSceneManager {
 					// console.log('maxfps: ', maxFPS);
 					// console.log('fpssamples: ', fpsSamples);
 
-					if (maxFPS < 50 && this.msaaSamples > 0) {
+					if (maxFPS < 50 && (this.msaaSamples > 0 || this.taaEnable)) {
 						this.msaaSamples = 0;
-						this.taaRenderPass.sampleLevel = 0;
+						this.composer.removePass(this.taaRenderPass)
 						this.resetPostProcessing();
 					}
 
-					if (maxFPS < 50) {
-						this.taaRenderPass.sampleLevel = 0;
-					}
-
-
 					if (maxFPS < 30) {
 						const fpsRatio = maxFPS / targetFPS;
-						const potentialPixelRatio = Math.sqrt(this.initialRenderPixelRatio ** 2.8 * fpsRatio);
+						const potentialPixelRatio = Math.sqrt((this.initialRenderPixelRatio) ** 2.8 * fpsRatio);
 
 						this.performantRenderPixelRatio = Math.max(
 							0.8,

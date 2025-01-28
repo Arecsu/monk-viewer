@@ -167,14 +167,14 @@ function getLowPerformanceSettings() {
 
   if (firefoxMacintoshRegex.test(navigator.userAgent)) {
     return {
-      disableMSAA: true,
+      disableAA: true,
       lowResolution: false
     }
   }
 
   if (firefoxAndroidRegex.test(navigator.userAgent)) {
     return {
-      disableMSAA: true,
+      disableAA: true,
       lowResolution: true
     }
   }
