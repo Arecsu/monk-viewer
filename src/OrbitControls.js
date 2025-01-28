@@ -552,7 +552,6 @@ class OrbitControls extends Controls {
 	_getZoomScale( delta ) {
 
 		const normalizedDelta = Math.abs( delta * 0.01 );
-		console.log(Math.pow( 0.95, normalizedDelta ));
 		return Math.pow( 0.95, this.zoomSpeed * normalizedDelta ) * this.zoomScale;
 
 	}
@@ -632,14 +631,12 @@ class OrbitControls extends Controls {
 
 	}
 
-	_dollyOut( dollyScale ) {
+	_dollyOut( dollyScale, damping = false ) {
 
 		if ( this.object.isPerspectiveCamera || this.object.isOrthographicCamera ) {
 
 			// this._scale /= dollyScale;
-         this._zoomDelta += dollyScale;
-
-			// console.warn( 'WARNING: OrbitControls.js encountered an unknown camera type - dolly/zoom disabled.' );
+			damping ? this._zoomDelta += dollyScale : this._scale /= dollyScale;
 
 		} else {
 
@@ -650,14 +647,13 @@ class OrbitControls extends Controls {
 
 	}
 
-	_dollyIn( dollyScale ) {
+	_dollyIn( dollyScale, damping = false  ) {
 
 		if ( this.object.isPerspectiveCamera || this.object.isOrthographicCamera ) {
 
-         this._zoomDelta -= dollyScale;
-
 			// this._scale *= dollyScale;
-			// console.warn( 'WARNING: OrbitControls.js encountered an unknown camera type - dolly/zoom disabled.' );
+			damping ? this._zoomDelta -= dollyScale : this._scale *= dollyScale;
+
 
 		} else {
 
@@ -746,11 +742,11 @@ class OrbitControls extends Controls {
 
 		if ( this._dollyDelta.y > 0 ) {
 
-			this._dollyOut( this._getZoomScale( this._dollyDelta.y ) );
+			this._dollyOut( this._getZoomScale( this._dollyDelta.y ), true );
 
 		} else if ( this._dollyDelta.y < 0 ) {
 
-			this._dollyIn( this._getZoomScale( this._dollyDelta.y ) );
+			this._dollyIn( this._getZoomScale( this._dollyDelta.y ), true );
 
 		}
 
@@ -782,13 +778,13 @@ class OrbitControls extends Controls {
 
          // this._zoomDelta += this._getZoomScale( event.deltaY )
 
-			this._dollyIn( this._getZoomScale( event.deltaY ) );
+			this._dollyIn( this._getZoomScale( event.deltaY ), true );
 
 		} else if ( event.deltaY > 0 ) {
 
          // this._zoomDelta -= this._getZoomScale( event.deltaY )
 
-			this._dollyOut( this._getZoomScale( event.deltaY ) );
+			this._dollyOut( this._getZoomScale( event.deltaY ), true );
 
 		}
 
@@ -1029,6 +1025,7 @@ class OrbitControls extends Controls {
 
 	}
 
+	
 	_handleTouchMoveDolly( event ) {
 
 		const position = this._getSecondPointerPosition( event );
