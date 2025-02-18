@@ -91,6 +91,7 @@ class ThreeSceneManager {
 		this.loadAssets()
 			.then(() => {
 				this.startPerformanceSamplingLoop();
+				// this.startRenderLoop();
 			})
 			.catch((error) => {
 				this.abortLoading(error);
@@ -184,7 +185,9 @@ class ThreeSceneManager {
 		this.pipeline.dispose();
 		this.pipeline = null;
 		this.setupPostProcessing();
-		this.handleResize(true);
+		// this.handleResize(true); 
+		// ↑ unnecesary, the main render loop already does it.
+		// plus, it makes the screen flash
 	}
 
 	setupInteraction() {
@@ -371,6 +374,7 @@ class ThreeSceneManager {
 					// console.log('maxfps: ', maxFPS);
 					// console.log('fpssamples: ', fpsSamples);
 
+					
 					if (maxFPS < 50 && this.msaaSamples > 0) {
 						this.msaaSamples = 0;
 						this.resetPostProcessing();
@@ -384,7 +388,6 @@ class ThreeSceneManager {
 							0.8,
 							Math.min(potentialPixelRatio, this.initialRenderPixelRatio),
 						);
-						console.log(potentialPixelRatio);
 					}
 
 					this.startRenderLoop();
