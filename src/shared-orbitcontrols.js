@@ -40,8 +40,8 @@ class ThreeSceneManager {
 	constructor(data) {
 		this.canvas = data.canvas;
 		this.inputElement = data.inputElement;
-		this.model = data.model;
-		this.envmap = data.envmap;
+		this.modelUrl = data.modelUrl;
+		this.envmapUrl = data.envmapUrl;
 		this.lowPerformanceSettings = {
 			 disableAA: data.lowPerformanceSettings?.disableAA ?? false,
 			 lowResolution: data.lowPerformanceSettings?.lowResolution ?? false
@@ -51,14 +51,15 @@ class ThreeSceneManager {
 		this.performantRenderPixelRatio = null;
 		// this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 4;
 		// disable msaa because we have taa
-		this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 2;
+		this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 4;
 		this.taaSamples = 2;
-		this.taaEnable = !this.disableAA;
+		this.taaEnable = false;
+		// this.taaEnable = !this.disableAA;
 
 		this.taaRenderPass = null;
 
 		this.pixelRatioVariation = 1; // this to handle screen DPI changes
-
+         
 		this.scene = null;
 		this.camera = null;
 		this.renderer = null;
@@ -70,6 +71,7 @@ class ThreeSceneManager {
 		this.throttleResize = 150; // miliseconds
 
 		this.lastFrame = Date.now();
+		this.hasAborted = false;
 		this.initScene();
 
 	}
@@ -82,7 +84,13 @@ class ThreeSceneManager {
 		//   this.setupLighting();
 		this.setupPostProcessing();
 		this.setupInteraction();
-		this.loadAssets();
+		this.loadAssets()
+			.then(() => {
+				this.startPerformanceSamplingLoop();
+			})
+			.catch((error) => {
+				this.abortLoading(error);
+			});
 	}
 
 	setupRenderer() {
@@ -146,27 +154,25 @@ class ThreeSceneManager {
 		const renderPass = new RenderPass(this.scene, this.camera);
 		this.composer.addPass(renderPass);
 
-		const bloomPass = new UnrealBloomPass(
-			new THREE.Vector2(
-				this.inputElement.clientWidth,
-				this.inputElement.clientHeight,
-			),
-			0.12,
-			0.9,
-			0.1,
-		);
-
-		const pixelRatio = this.getWorkingPixelRatio();
-
-
-
-
 		this.taaRenderPass = new TAARenderPass( this.scene, this.camera );
 		this.taaRenderPass.unbiased = false;
 		this.taaRenderPass.sampleLevel = this.taaSamples;
 		this.taaEnable && this.composer.addPass(this.taaRenderPass);
 		
-		// this.composer.addPass(bloomPass);
+
+		const bloomPass = new UnrealBloomPass(
+			new THREE.Vector2(
+				this.inputElement.clientWidth,
+				this.inputElement.clientHeight,
+			),
+			0.8, // threshold
+			20,  // strength
+			2.0,  // radius
+		);
+
+		// const pixelRatio = this.getWorkingPixelRatio();
+
+		this.composer.addPass(bloomPass);
 
 		const outputPass = new OutputPass();
 		this.composer.addPass(outputPass);
@@ -230,56 +236,47 @@ class ThreeSceneManager {
 		});
 	}
 
+	abortLoading(error) {
+		console.error("Aborting scene loading:", error);
+		this.hasAborted = true;
+		// Optionally: hide the canvas, show an error message, etc.
+		// this.canvas.style.display = "none";
+	}
+  
+
 	loadAssets() {
-		this.loadArtworkModel();
-		this.loadHDREnvironment();
+		return Promise.all([
+			this.loadArtworkModel(),
+			this.loadHDREnvironment()
+		]);
 	}
 
 	loadArtworkModel() {
-		const loader = new GLTFLoader();
-		loader.load(artworkModelUrl, async (gltf) => {
-			const model = gltf.scene;
-			// model.rotation.y -= 0.6;
-			// model.rotation.x += 0.25;
-			// model.rotation.z -= 0.4;
-			model.scale.set(1, 1, 1);
+		return new Promise((resolve, reject) => {
+			const loader = new GLTFLoader();
+			loader.load(this.modelUrl, async (gltf) => {
+				if (this.hasAborted) return;
+				const model = gltf.scene;
+				// model.rotation.y -= 0.6;
+				// model.rotation.x += 0.25;
+				// model.rotation.z -= 0.4;
+				model.scale.set(1, 1, 1);
 
-			model.traverse((child) => {
-				// console.log(child.material)
-				if (child.material) {
-					// child.material.anisotropy = 1.0
-					child.material.needsUpdate = true
-					child.material.onBeforeCompile = (shader) => {
-						// Inject code into the shader
-						// console.log(shader.fragmentShader);
-						// shader.vertexShader = ModShader2;
-						// shader.fragmentShader = ModShader;
-						
-						// shader.fragmentShader = shader.fragmentShader.replace(
-							// `vec3 totalSpecular = reflectedLight.directSpecular + reflectedLight.indirectSpecular;`,
-							// `vec3 totalSpecular = a reflectedLight.directSpecular + reflectedLight.indirectSpecular;`,
-						// );
-						// shader.fragmentShader = shader.vertexShader.replace(
-							// `varying vec3 vViewPosition;`,
-							// `vvarying vec3 vViewPosition;`,
-						// );
+				this.optimizeModelTextures(model);
 
-						// console.log(shader)
-					};
-				}
+				await this.renderer.compileAsync(model, this.camera, this.scene);
+
+				this.mixer = new THREE.AnimationMixer(model);
+				const action = this.mixer.clipAction(gltf.animations[0]);
+				// action.play();
+
+				this.scene.add(model);
+				resolve();
+			},      
+			undefined,
+			(error) => {
+				reject("Failed to load artwork model: " + error);
 			});
-
-			this.optimizeModelTextures(model);
-
-			await this.renderer.compileAsync(model, this.camera, this.scene);
-
-			this.mixer = new THREE.AnimationMixer(model);
-			const action = this.mixer.clipAction(gltf.animations[0]);
-			// action.play();
-
-			this.scene.add(model);
-			this.startPerformanceSamplingLoop();
-			// this.startRenderLoop();
 		});
 	}
 
@@ -305,19 +302,25 @@ class ThreeSceneManager {
 	}
 
 	loadHDREnvironment() {
-		const loader = new HDRJPGLoader(this.renderer);
-		loader.load(HDRIMAP, (hdri) => {
-			const hdrTexture = hdri.renderTarget.texture;
-			this.configureHDRTexture(hdrTexture);
-			// this.scene.background = hdrTexture
-			// this.scene.backgroundBlurriness = 0.8
-			// this.scene.backgroundIntensity = 0.4
-			this.scene.environment = hdrTexture;
-			// this.scene.environmentRotation = new THREE.Euler(0.0, -2.37, 0.0);
-			// this.scene.environmentRotation = new THREE.Euler(-5.045, -2.37, 1.0);
-			this.scene.environment.mapping =
-				THREE.EquirectangularReflectionMapping;
-			hdri.dispose();
+		return new Promise((resolve, reject) => {
+			const loader = new HDRJPGLoader(this.renderer);
+			loader.load(this.envmapUrl, (hdri) => {
+				const hdrTexture = hdri.renderTarget.texture;
+				this.configureHDRTexture(hdrTexture);
+				// this.scene.background = hdrTexture
+				// this.scene.backgroundBlurriness = 0.8
+				// this.scene.backgroundIntensity = 0.4
+				this.scene.environment = hdrTexture;
+				// this.scene.environmentRotation = new THREE.Euler(0.0, -2.37, 0.0);
+				// this.scene.environmentRotation = new THREE.Euler(-5.045, -2.37, 1.0);
+				this.scene.environment.mapping = THREE.EquirectangularReflectionMapping;
+				hdri.dispose();
+				resolve();
+			},
+			undefined,
+			(error) => {
+				reject("Failed to load HDR environment: " + error);
+			});
 		});
 	}
 

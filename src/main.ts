@@ -163,29 +163,33 @@ function getLowPerformanceSettings() {
 
 class MonkView extends HTMLElement {
   private canvas: HTMLCanvasElement;
-  private modelUrl: string;
-  private maxZoom: number;
-  private minZoom: number;
-  private envmapUrl: string;
-
-  // Define common options as a static property
-  private commonOptions = {
-    pixelRatio: window.devicePixelRatio || 1,
-    model: "",
-    envmap: "",
-    lowPerformanceSettings: getLowPerformanceSettings(),
+  private commonOptions: {
+    pixelRatio: number;
+    modelUrl: string;
+    envmapUrl: string;
+    minZoom: number;
+    maxZoom: number;
+    lowPerformanceSettings: ReturnType<typeof getLowPerformanceSettings>;
   };
 
   constructor() {
     super();
     this.canvas = document.createElement("canvas");
-    this.modelUrl = this.getAttribute("model") || "";
-    this.maxZoom = parseFloat(this.getAttribute("max-zoom") || "1.0");
-    this.minZoom = parseFloat(this.getAttribute("min-zoom") || "0.1");
-    this.envmapUrl = this.getAttribute("envmap") || "";
 
-    this.commonOptions.model = this.getAttribute("model") || "";
-    this.commonOptions.envmap = this.getAttribute("envmap") || "";
+    // Extract attributes once and build the options object.
+    const modelUrl = this.getAttribute("model") || "";
+    const envmapUrl = this.getAttribute("envmap") || "";
+    const minZoom = parseFloat(this.getAttribute("min-zoom") || "0.1");
+    const maxZoom = parseFloat(this.getAttribute("max-zoom") || "1.0");
+
+    this.commonOptions = {
+      pixelRatio: window.devicePixelRatio || 1,
+      modelUrl,
+      envmapUrl,
+      minZoom,
+      maxZoom,
+      lowPerformanceSettings: getLowPerformanceSettings(),
+    };
   }
 
   connectedCallback(): void {
@@ -195,10 +199,21 @@ class MonkView extends HTMLElement {
   }
 
   logAttributes(): void {
-    console.log("Model URL:", this.modelUrl);
-    console.log("Max Zoom:", this.maxZoom);
-    console.log("Min Zoom:", this.minZoom);
-    console.log("Envmap URL:", this.envmapUrl);
+    // Access values from commonOptions directly.
+    console.log("Model URL:", this.commonOptions.modelUrl);
+    console.log("Max Zoom:", this.commonOptions.maxZoom);
+    console.log("Min Zoom:", this.commonOptions.minZoom);
+    console.log("Envmap URL:", this.commonOptions.envmapUrl);
+  }
+
+  private isValidURL(url: string): boolean {
+    if (!url) return false;
+    try {
+      new URL(url, document.baseURI);
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   startWorker(canvas: HTMLCanvasElement): void {
@@ -221,6 +236,14 @@ class MonkView extends HTMLElement {
 
   initScene(): void {
     if (!this.canvas) return;
+
+    const hasValidModel = this.isValidURL(this.commonOptions.modelUrl);
+    const hasValidEnvmap = this.isValidURL(this.commonOptions.envmapUrl);
+
+    if (!(hasValidModel && hasValidEnvmap)) {
+      console.warn("No valid model or envmap found. Scene won't be initialized.");
+      return;
+    }
 
     this.canvas.transferControlToOffscreen !== undefined 
       ? this.startWorker(this.canvas)
