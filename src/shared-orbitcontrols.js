@@ -59,6 +59,13 @@ class ThreeSceneManager {
          
 		this.scene = null;
 		this.camera = null;
+
+		this.cameraSettings = {
+			targetDistance: data.targetDistance,
+			maxDistance: data.targetDistance / 0.9,
+			minDistance: data.minDistance
+		}
+
 		this.renderer = null;
 		this.pipeline = null;
 		this.controls = null;
@@ -111,7 +118,7 @@ class ThreeSceneManager {
 
 	setupCamera() {
 		this.camera = new THREE.PerspectiveCamera(50, 2, 0.1, 100);
-		this.camera.position.z = 0.8;
+		this.camera.position.z = this.cameraSettings.targetDistance;
 		// this.camera.rotation.y = Math.PI * 0.5;
 	}
 
@@ -120,6 +127,8 @@ class ThreeSceneManager {
 		this.controls.enableDamping = true;
 		this.controls.dampingFactor = 0.055;
 		this.controls.target.set(0, 0, 0);
+		this.controls.maxDistance = this.cameraSettings.maxDistance;
+		this.controls.minDistance = this.cameraSettings.minDistance;
 		this.controls.update();
 	}
 

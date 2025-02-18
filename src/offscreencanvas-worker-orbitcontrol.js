@@ -110,6 +110,9 @@ function start( data ) {
 		pixelRatio: data.pixelRatio,
 		modelUrl: data.modelUrl,
 		envmapUrl: data.envmapUrl,
+		minDistance: data.minDistance,
+      targetDistance: data.targetDistance,
+      maxDistance: data.maxDistance,
 		lowPerformanceSettings: data.lowPerformanceSettings
 	} );
 

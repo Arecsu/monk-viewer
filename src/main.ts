@@ -167,8 +167,9 @@ class MonkView extends HTMLElement {
     pixelRatio: number;
     modelUrl: string;
     envmapUrl: string;
-    minZoom: number;
-    maxZoom: number;
+    minDistance: number;
+    targetDistance: number;
+    maxDistance: number;
     lowPerformanceSettings: ReturnType<typeof getLowPerformanceSettings>;
   };
 
@@ -179,15 +180,17 @@ class MonkView extends HTMLElement {
     // Extract attributes once and build the options object.
     const modelUrl = this.getAttribute("model") || "";
     const envmapUrl = this.getAttribute("envmap") || "";
-    const minZoom = parseFloat(this.getAttribute("min-zoom") || "0.1");
-    const maxZoom = parseFloat(this.getAttribute("max-zoom") || "1.0");
+    const targetDistance = parseFloat(this.getAttribute("target-distance") || "0.8");
+    const minDistance = parseFloat(this.getAttribute("min-distance") || "0.1");
+    const maxDistance = parseFloat(this.getAttribute("max-distance") || "1.0");
 
     this.commonOptions = {
       pixelRatio: window.devicePixelRatio || 1,
       modelUrl,
       envmapUrl,
-      minZoom,
-      maxZoom,
+        minDistance,
+        targetDistance,
+        maxDistance,
       lowPerformanceSettings: getLowPerformanceSettings(),
     };
   }
@@ -201,8 +204,9 @@ class MonkView extends HTMLElement {
   logAttributes(): void {
     // Access values from commonOptions directly.
     console.log("Model URL:", this.commonOptions.modelUrl);
-    console.log("Max Zoom:", this.commonOptions.maxZoom);
-    console.log("Min Zoom:", this.commonOptions.minZoom);
+    console.log("Max distance:", this.commonOptions.maxDistance);
+    console.log("Target distance:", this.commonOptions.targetDistance);
+    console.log("Min distance:", this.commonOptions.minDistance);
     console.log("Envmap URL:", this.commonOptions.envmapUrl);
   }
 
