@@ -3,22 +3,25 @@ import * as THREE from "three";
 import { OrbitControls } from "./OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { HDRJPGLoader } from "@monogrid/gainmap-js";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
-import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
-import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
-import { FXAAShader } from "three/addons/shaders/FXAAShader.js";
-import { SMAAPass } from "./postprocessing/SMAAPass.js"
-import { TAARenderPass } from 'three/addons/postprocessing/TAARenderPass.js';
-import { DitheringPass } from "./postprocessing/DitheringPass.js";
+// import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+// import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+// import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+// import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+// import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
+// import { FXAAShader } from "three/addons/shaders/FXAAShader.js";
+// import { SMAAPass } from "./postprocessing/SMAAPass.js"
+// import { TAARenderPass } from 'three/addons/postprocessing/TAARenderPass.js';
+// import { DitheringPass } from "./postprocessing/DitheringPass.js";
 import ModShader from "./mod3_meshphysical_complete.glsl?raw"
 import ModShader2 from "./meshphysical_vertex.glsl?raw"
+
+import { BloomEffect, RenderPipeline, ClearPass, GeometryPass, EffectPass, ToneMappingEffect, ToneMapping } from "postprocessing";
+// import { SMAAEffect, SMAAPreset } from "postprocessing"
 
 // import artworkModelUrl from "./McLovin-1024x.glb?url";
 import artworkModelUrl from "./McLovin-1024x-2.glb?url";
 // import artworkModelUrl from "./McLovin-1024x-bevel.glb?url";
-import HDRIMAP from "./old_bus_depot_2k_HDR.jpg?url";
+// import HDRIMAP from "./old_bus_depot_2k_HDR.jpg?url";
 // import HDRIMAP from "./hanger_exterior_cloudy_4k.jpg?url";
 
 
@@ -41,6 +44,7 @@ class ThreeSceneManager {
 		this.canvas = data.canvas;
 		this.inputElement = data.inputElement;
 		this.modelUrl = data.modelUrl;
+		// this.modelUrl = artworkModelUrl;
 		this.envmapUrl = data.envmapUrl;
 		this.lowPerformanceSettings = {
 			 disableAA: data.lowPerformanceSettings?.disableAA ?? false,
@@ -49,21 +53,14 @@ class ThreeSceneManager {
 		this.baseLoadPixelRatio = data.pixelRatio ?? window.devicePixelRatio;
 		this.initialRenderPixelRatio = this.lowPerformanceSettings.lowResolution ? data.pixelRatio / 2 : this.baseLoadPixelRatio;
 		this.performantRenderPixelRatio = null;
-		// this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 4;
-		// disable msaa because we have taa
 		this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 4;
-		this.taaSamples = 2;
-		this.taaEnable = false;
-		// this.taaEnable = !this.disableAA;
-
-		this.taaRenderPass = null;
 
 		this.pixelRatioVariation = 1; // this to handle screen DPI changes
          
 		this.scene = null;
 		this.camera = null;
 		this.renderer = null;
-		this.composer = null;
+		this.pipeline = null;
 		this.controls = null;
 		this.mixer = null;
 		this.pickHelper = null;
@@ -98,16 +95,18 @@ class ThreeSceneManager {
 			powerPreference: "high-performance",
 			antialias: true,
 			canvas: this.canvas,
-			stencil: true,
+			stencil: false,
+			depth: false,
 		});
 
 		this.renderer.setPixelRatio(this.initialRenderPixelRatio);
-		this.renderer.toneMapping = THREE.ReinhardToneMapping;
+		// this.renderer.toneMapping = THREE.ReinhardToneMapping;
 		// this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-	// this.renderer.toneMapping = THREE.CineonToneMapping;
-	// this.renderer.toneMapping = THREE.NeutralToneMapping;
-	// this.renderer.toneMapping = THREE.AgXToneMapping;
-		this.renderer.toneMappingExposure = 1.5;
+		// this.renderer.toneMapping = THREE.CineonToneMapping;
+		// this.renderer.toneMapping = THREE.NoToneMapping
+		// this.renderer.toneMapping = THREE.NeutralToneMapping;
+		// this.renderer.toneMapping = THREE.AgXToneMapping;
+		this.renderer.toneMappingExposure = 1.3;
 	}
 
 	setupCamera() {
@@ -137,62 +136,44 @@ class ThreeSceneManager {
 	}
 
 	setupPostProcessing() {
-		const renderTarget = new THREE.WebGLRenderTarget(
-			this.inputElement.clientWidth,
-			this.inputElement.clientHeight,
-			{
+		this.pipeline = new RenderPipeline(this.renderer);
+		this.pipeline.add(new ClearPass());
+		this.pipeline.add(new GeometryPass(
+			this.scene, this.camera, 
+			{ 
+				frameBufferType: THREE.HalfFloatType, 
 				samples: this.msaaSamples,
-				anisotropy: this.renderer.capabilities.getMaxAnisotropy(),
-				colorSpace: THREE.LinearSRGBColorSpace,
-				// type: THREE.UnsignedByteType,
-				type: THREE.HalfFloatType,
-			},
-		);
-
-		this.composer = new EffectComposer(this.renderer, renderTarget);
-
-		const renderPass = new RenderPass(this.scene, this.camera);
-		this.composer.addPass(renderPass);
-
-		this.taaRenderPass = new TAARenderPass( this.scene, this.camera );
-		this.taaRenderPass.unbiased = false;
-		this.taaRenderPass.sampleLevel = this.taaSamples;
-		this.taaEnable && this.composer.addPass(this.taaRenderPass);
-		
-
-		const bloomPass = new UnrealBloomPass(
-			new THREE.Vector2(
-				this.inputElement.clientWidth,
-				this.inputElement.clientHeight,
+			}));
+		this.pipeline.add(new EffectPass(
+			new BloomEffect(
+				{
+					luminanceSmoothing: 0.4,
+					intensity: 0.2,
+					radius: 1,
+					luminanceThreshold: 0.1,
+					levels: 8
+				}
 			),
-			0.8, // threshold
-			20,  // strength
-			2.0,  // radius
-		);
-
-		// const pixelRatio = this.getWorkingPixelRatio();
-
-		this.composer.addPass(bloomPass);
-
-		const outputPass = new OutputPass();
-		this.composer.addPass(outputPass);
-
-
-		
-
-
-
-		const ditheringPass = new DitheringPass({
-			ditherIntensity: 1.0,
-			ditherPattern: 0 // 0 for noise-based dithering, 1 for ordered dithering
-		});
-		this.composer.addPass(ditheringPass);
-
+			new ToneMappingEffect(
+				{
+					toneMapping: ToneMapping.REINHARD
+					// toneMapping: ToneMapping.ACES_FILMIC
+					// toneMapping: ToneMapping.AGX
+				}
+			),
+			/*
+			new SMAAEffect(
+				{
+					preset: SMAAPreset.HIGH
+				}
+			)
+			*/
+		));
 	}
 
 	resetPostProcessing() {
-		this.composer.dispose();
-		this.composer = null;
+		this.pipeline.dispose();
+		this.pipeline = null;
 		this.setupPostProcessing();
 		this.handleResize(true);
 	}
@@ -261,6 +242,18 @@ class ThreeSceneManager {
 				// model.rotation.x += 0.25;
 				// model.rotation.z -= 0.4;
 				model.scale.set(1, 1, 1);
+
+				/*
+				model.traverse((child) => {
+					if (child.material) {
+						child.material.needsUpdate = true
+						child.material.onBeforeCompile = (shader) => {
+							shader.vertexShader = ModShader2;
+							shader.fragmentShader = ModShader;
+						};
+					}
+				});
+				*/
 
 				this.optimizeModelTextures(model);
 
@@ -346,7 +339,7 @@ class ThreeSceneManager {
 			this.updateScene(time, now);
 
 			// this.renderer.render(this.scene, this.camera);
-			this.composer.render();
+			this.pipeline.render(time);
 
 			// Increment the frame counter
 			frames++;
@@ -369,9 +362,8 @@ class ThreeSceneManager {
 					// console.log('maxfps: ', maxFPS);
 					// console.log('fpssamples: ', fpsSamples);
 
-					if (maxFPS < 50 && (this.msaaSamples > 0 || this.taaEnable)) {
+					if (maxFPS < 50 && this.msaaSamples > 0) {
 						this.msaaSamples = 0;
-						this.composer.removePass(this.taaRenderPass)
 						this.resetPostProcessing();
 					}
 
@@ -420,7 +412,7 @@ class ThreeSceneManager {
 			this.updateScene(time, now);
 
 			// this.renderer.render(this.scene, this.camera);
-			this.composer.render();
+			this.pipeline.render(time);
 
 			requestAnimationFrame(render);
 		};
@@ -465,8 +457,10 @@ class ThreeSceneManager {
 	updateRendererSize(width, height, workingPixelRatio) {
 		this.renderer.setPixelRatio(workingPixelRatio || 1);
 		this.renderer.setSize(width, height, false);
-		this.composer.setPixelRatio(this.renderer.getPixelRatio());
-		this.composer.setSize(width, height);
+		this.pipeline.setSize(width, height, false);
+		this.pipeline.setPixelRatio(this.renderer.getPixelRatio());
+		// this.pipeline.setPixelRatio(2.0);
+		// this.pipeline.setSize
 	}
 
 	updateScene(time, now) {
