@@ -11,6 +11,8 @@ import {
 	MathUtils
 } from 'three';
 
+import { Damper } from './Damper'
+
 // OrbitControls performs orbiting, dollying (zooming), and panning.
 // Unlike TrackballControls, it maintains the "up" direction object.up (+Y by default).
 //
@@ -83,13 +85,14 @@ class OrbitControls extends Controls {
 		// If damping is enabled, you must call controls.update() in your animation loop
 		this.enableDamping = false;
 		this.dampingFactor = 0.1;
-      this.zoomDampingFactor = 11.0;
+      this.zoomDampingFactor = 0.1;
+		this.zoomDamper = new Damper(70) // 200 ms
 
 		// This option actually enables dollying in and out; left as "zoom" for backwards compatibility.
 		// Set to false to disable zooming
 		this.enableZoom = true;
-		this.zoomSpeed = 1.0;
-		this.zoomScale = 0.1;
+		this.zoomSpeed = 0.1;
+		this.zoomScale = 0.08;
 
 		// Set to false to disable rotating
 		this.enableRotate = true;
@@ -138,7 +141,6 @@ class OrbitControls extends Controls {
 		// current position in spherical coordinates
 		this._spherical = new Spherical();
 		this._sphericalDelta = new Spherical();
-      this._zoomDelta = 0;
 
 		this._scale = 1;
 		this._panOffset = new Vector3();
@@ -164,6 +166,9 @@ class OrbitControls extends Controls {
 
 		this._controlActive = false;
 
+		this._zoomDelta = 0;
+		this._zoomGoal = this._spherical.radius;
+
 		// event listeners
 
 		this._onPointerMove = onPointerMove.bind( this );
@@ -182,7 +187,13 @@ class OrbitControls extends Controls {
 		this._interceptControlDown = interceptControlDown.bind( this );
 		this._interceptControlUp = interceptControlUp.bind( this );
 
-		//
+		// https://github.com/google/model-viewer/blob/master/packages/model-viewer/src/three-components/SmoothControls.ts
+		this.damperNormalization = {
+			sphericalRadius: this.maximumRadius,
+			sphericalTheta: this.maxPolarAngle,
+			sphericalPhi: this.maxPolarAngle,
+			fov: 1
+		}
 
 		if ( this.domElement !== null ) {
 
@@ -296,7 +307,8 @@ class OrbitControls extends Controls {
 
 	update( deltaTime = 0 ) {
 
-		console.log(deltaTime)
+		// deltaTime is in seconds
+		const deltaTimeMS = deltaTime * 1000
 
 		const position = this.object.position;
 
@@ -320,8 +332,11 @@ class OrbitControls extends Controls {
 			this._spherical.phi += this._sphericalDelta.phi * this.dampingFactor;
    
          if ( this.object.isPerspectiveCamera || this.object.isOrthographicCamera ) {
-				console.log(this._scale, this._zoomDelta, this.zoomDampingFactor, deltaTime)
-            this._scale += this._zoomDelta * this.zoomDampingFactor * deltaTime;
+				// console.log(this._scale, this._zoomDelta, this.zoomDampingFactor, deltaTime)
+				console.log(this._spherical.radius, this._zoomGoal)
+				this._spherical.radius = this.zoomDamper.update(
+					this._spherical.radius, this._zoomGoal, deltaTimeMS, this.damperNormalization.sphericalRadius)
+            // this._scale += this._zoomDelta * this.zoomDampingFactor * deltaTime;
          }
 
 		} else {
@@ -330,6 +345,9 @@ class OrbitControls extends Controls {
 			this._spherical.phi += this._sphericalDelta.phi;
 
 		}
+
+		
+
 
 		// restrict theta to be between desired limits
 
@@ -639,6 +657,7 @@ class OrbitControls extends Controls {
 
 			// this._scale /= dollyScale;
 			damping ? this._zoomDelta += dollyScale : this._scale /= dollyScale;
+			damping ? this._zoomGoal = this._clampDistance(this._zoomGoal + dollyScale) : this._scale /= dollyScale;
 
 		} else {
 
@@ -655,7 +674,8 @@ class OrbitControls extends Controls {
 
 			// this._scale *= dollyScale;
 			damping ? this._zoomDelta -= dollyScale : this._scale *= dollyScale;
-
+			damping ? this._zoomGoal = this._clampDistance(this._zoomGoal - dollyScale) : this._scale *= dollyScale;
+			
 
 		} else {
 
