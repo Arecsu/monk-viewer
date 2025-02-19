@@ -13,7 +13,7 @@ import { HDRJPGLoader } from "@monogrid/gainmap-js";
 // import { TAARenderPass } from 'three/addons/postprocessing/TAARenderPass.js';
 // import { DitheringPass } from "./postprocessing/DitheringPass.js";
 import ModShader from "./mod3_meshphysical_complete.glsl?raw"
-import ModShader2 from "./meshphysical_vertex.glsl?raw"
+// import ModShader2 from "./meshphysical_vertex.glsl?raw"
 
 import { BloomEffect, RenderPipeline, ClearPass, GeometryPass, EffectPass, ToneMappingEffect, ToneMapping } from "postprocessing";
 // import { SMAAEffect, SMAAPreset } from "postprocessing"
@@ -74,7 +74,7 @@ class ThreeSceneManager {
 		this.lastResizeTime = null;
 		this.throttleResize = 150; // miliseconds
 
-		this.lastFrame = Date.now();
+		this.lastFrame = performance.now();
 		this.hasAborted = false;
 		this.initScene();
 
@@ -260,12 +260,13 @@ class ThreeSceneManager {
 					if (child.material) {
 						child.material.needsUpdate = true
 						child.material.onBeforeCompile = (shader) => {
-							shader.vertexShader = ModShader2;
+							// shader.vertexShader = ModShader2;
 							shader.fragmentShader = ModShader;
 						};
 					}
 				});
 				*/
+				
 
 				this.optimizeModelTextures(model);
 
@@ -338,69 +339,72 @@ class ThreeSceneManager {
 	}
 
 	startPerformanceSamplingLoop() {
-		let prevTime = 0;
-		let frames = 0;
+		let samplingActive = true;
+		let prevTimestamp = null;
+		let frameCount = 0;
 		const fpsSamples = [];
-		const maxSamples = 5;
-
-		const performanceSample = (time) => {
-			time *= 0.001;
-			const now = Date.now();
-
-			this.handleResize();
-			this.updateScene(time, now);
-
-			// this.renderer.render(this.scene, this.camera);
-			this.pipeline.render(time);
-
-			// Increment the frame counter
-			frames++;
-
-			// Collect FPS samples for the first 400 milliseconds
-			if (time >= prevTime + 0.1) { // 0.1 second has passed
-				const fps = frames / (time - prevTime);
-				fpsSamples.push(fps);
-
-				prevTime = time;
-				frames = 0;
-
-				// If we have collected 5 samples, evaluate performance
-				if (fpsSamples.length >= maxSamples) {
-					// const maxFPS = Math.max(...fpsSamples);
-					// const maxFPS = median(fpsSamples.slice(3, -1));
-					const maxFPS = getAverage(fpsSamples.slice(3));
-					const targetFPS = 75;
-
-					// console.log('maxfps: ', maxFPS);
-					// console.log('fpssamples: ', fpsSamples);
-
-					
-					if (maxFPS < 50 && this.msaaSamples > 0) {
-						this.msaaSamples = 0;
-						this.resetPostProcessing();
-					}
-
-					if (maxFPS < 30) {
-						const fpsRatio = maxFPS / targetFPS;
-						const potentialPixelRatio = Math.sqrt((this.initialRenderPixelRatio) ** 2.8 * fpsRatio);
-
-						this.performantRenderPixelRatio = Math.max(
-							0.8,
-							Math.min(potentialPixelRatio, this.initialRenderPixelRatio),
-						);
-					}
-
-					this.startRenderLoop();
-
-					return;
-				}
-			}
-
-			requestAnimationFrame(performanceSample);
+		const requiredSamples = 1; // can use more than 1
+		const sampleDuration = 500; // milliseconds per sample
+  
+		const evaluatePerformance = () => {
+			 // Use median of last 5 samples for stability
+			 const validSamples = fpsSamples.slice(-5);
+			 validSamples.sort((a, b) => a - b);
+			 const medianFPS = validSamples[Math.floor(validSamples.length / 2)];
+  
+			 console.log('Performance Evaluation - Median FPS:', medianFPS);
+			 console.log('All Samples:', fpsSamples);
+  
+			 if (medianFPS < 50 && this.msaaSamples > 0) {
+				  this.msaaSamples = 0;
+				  this.resetPostProcessing();
+			 }
+  
+			 if (medianFPS < 30) {
+				  const targetFPS = 75;
+				  const fpsRatio = Math.min(medianFPS / targetFPS, 1);
+				  const potentialPixelRatio = Math.sqrt((this.initialRenderPixelRatio ** 2.8) * fpsRatio);
+				  
+				  this.performantRenderPixelRatio = Math.max(
+						0.8,
+						Math.min(potentialPixelRatio, this.initialRenderPixelRatio)
+				  );
+			 }
+  
+			 this.startRenderLoop();
 		};
-
-		requestAnimationFrame(performanceSample);
-	}
+  
+		const sampleFrame = (timestamp) => {
+			 if (!samplingActive) return;
+  
+			 if (!prevTimestamp) prevTimestamp = timestamp;
+			 const elapsed = timestamp - prevTimestamp;
+  
+			 frameCount++;
+  
+			 this.handleResize();
+			 this.updateScene(timestamp, performance.now());
+			 this.pipeline.render(timestamp);
+  
+			 if (elapsed >= sampleDuration) {
+				  const fps = (frameCount * 1000) / elapsed;
+				  fpsSamples.push(fps);
+  
+				  prevTimestamp = timestamp;
+				  frameCount = 0;
+  
+				  if (fpsSamples.length >= requiredSamples) {
+						samplingActive = false;
+						evaluatePerformance();
+						return;
+				  }
+			 }
+  
+			 requestAnimationFrame(sampleFrame);
+		};
+  
+		requestAnimationFrame(sampleFrame);
+  }
 
 	startRenderLoop() {
 		let prevTime = 0;
@@ -409,7 +413,7 @@ class ThreeSceneManager {
 
 		const render = (time) => {
 			time *= 0.001;
-			const now = Date.now();
+			const now = performance.now();
 
 			frames++;
 
@@ -445,7 +449,7 @@ class ThreeSceneManager {
 		const { clientWidth: width, clientHeight: height, pixelRatio } = this.inputElement;
 		this.pixelRatioVariation = (pixelRatio / this.baseLoadPixelRatio) ?? 1;
 		const workingPixelRatio = this.getWorkingPixelRatio();
-		const now = Date.now();
+		const now = performance.now();
 
 		if (forceResize || this.needsResize(now, width, height, workingPixelRatio)) {
 			this.updateRendererSize(width, height, workingPixelRatio);
