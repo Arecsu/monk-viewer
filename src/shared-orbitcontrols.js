@@ -130,6 +130,7 @@ class ThreeSceneManager {
 		this.controls.target.set(0, 0, 0);
 		this.controls.maxDistance = this.cameraSettings.maxDistance;
 		this.controls.minDistance = this.cameraSettings.minDistance;
+		this.controls.decayTime = 100;
 		this.controls.update();
 	}
 
@@ -493,7 +494,7 @@ class ThreeSceneManager {
 	updateScene(now) {
 		const dt = (now - this.lastFrame) / 1000;
 		if (this.mixer) this.mixer.update(dt);
-		this.controls.update();
+		this.controls.update(dt);
 		this.lastFrame = now;
 	}
 

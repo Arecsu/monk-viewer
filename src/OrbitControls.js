@@ -82,8 +82,8 @@ class OrbitControls extends Controls {
 		// Set to true to enable damping (inertia)
 		// If damping is enabled, you must call controls.update() in your animation loop
 		this.enableDamping = false;
-		this.dampingFactor = 0.05;
-      this.zoomDampingFactor = 0.1;
+		this.dampingFactor = 0.1;
+      this.zoomDampingFactor = 11.0;
 
 		// This option actually enables dollying in and out; left as "zoom" for backwards compatibility.
 		// Set to false to disable zooming
@@ -190,7 +190,6 @@ class OrbitControls extends Controls {
 
 		}
 
-		this.update();
 
 	}
 
@@ -289,13 +288,15 @@ class OrbitControls extends Controls {
 		this.object.updateProjectionMatrix();
 		this.dispatchEvent( _changeEvent );
 
-		this.update();
+		// this.update();
 
 		this.state = _STATE.NONE;
 
 	}
 
-	update( deltaTime = null ) {
+	update( deltaTime = 0 ) {
+
+		console.log(deltaTime)
 
 		const position = this.object.position;
 
@@ -319,7 +320,8 @@ class OrbitControls extends Controls {
 			this._spherical.phi += this._sphericalDelta.phi * this.dampingFactor;
    
          if ( this.object.isPerspectiveCamera || this.object.isOrthographicCamera ) {
-            this._scale += this._zoomDelta * this.zoomDampingFactor;
+				console.log(this._scale, this._zoomDelta, this.zoomDampingFactor, deltaTime)
+            this._scale += this._zoomDelta * this.zoomDampingFactor * deltaTime;
          }
 
 		} else {
@@ -405,7 +407,7 @@ class OrbitControls extends Controls {
 
 			this._sphericalDelta.theta *= ( 1 - this.dampingFactor );
 			this._sphericalDelta.phi *= ( 1 - this.dampingFactor );
-         this._zoomDelta *= ( 1 - this.zoomDampingFactor );
+         this._zoomDelta *= ( 1 - this.zoomDampingFactor * deltaTime );
 
 			this._panOffset.multiplyScalar( 1 - this.dampingFactor );
 
@@ -730,7 +732,6 @@ class OrbitControls extends Controls {
 
 		this._rotateStart.copy( this._rotateEnd );
 
-		this.update();
 
 	}
 
@@ -752,7 +753,6 @@ class OrbitControls extends Controls {
 
 		this._dollyStart.copy( this._dollyEnd );
 
-		this.update();
 
 	}
 
@@ -766,7 +766,6 @@ class OrbitControls extends Controls {
 
 		this._panStart.copy( this._panEnd );
 
-		this.update();
 
 	}
 
@@ -788,7 +787,6 @@ class OrbitControls extends Controls {
 
 		}
 
-		this.update();
 
 	}
 
@@ -897,7 +895,6 @@ class OrbitControls extends Controls {
 			// prevent the browser from scrolling on cursor keys
 			event.preventDefault();
 
-			this.update();
 
 		}
 
@@ -1493,7 +1490,6 @@ function onTouchMove( event ) {
 
 			this._handleTouchMoveRotate( event );
 
-			this.update();
 
 			break;
 
@@ -1503,7 +1499,6 @@ function onTouchMove( event ) {
 
 			this._handleTouchMovePan( event );
 
-			this.update();
 
 			break;
 
@@ -1513,7 +1508,6 @@ function onTouchMove( event ) {
 
 			this._handleTouchMoveDollyPan( event );
 
-			this.update();
 
 			break;
 
@@ -1523,7 +1517,6 @@ function onTouchMove( event ) {
 
 			this._handleTouchMoveDollyRotate( event );
 
-			this.update();
 
 			break;
 
