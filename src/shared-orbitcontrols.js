@@ -339,30 +339,26 @@ class ThreeSceneManager {
 	}
 
 	startPerformanceSamplingLoop() {
-		let samplingActive = true;
-		let prevTimestamp = null;
+		const stabilizationTime = 400; // Warm-up period
+		const measureDuration = 500;   // Active measurement window
+		
+		let startTime = null;
 		let frameCount = 0;
-		const fpsSamples = [];
-		const requiredSamples = 1; // can use more than 1
-		const sampleDuration = 500; // milliseconds per sample
+		let isMeasuring = false;
   
-		const evaluatePerformance = () => {
-			 // Use median of last 5 samples for stability
-			 const validSamples = fpsSamples.slice(-5);
-			 validSamples.sort((a, b) => a - b);
-			 const medianFPS = validSamples[Math.floor(validSamples.length / 2)];
+		const applyQualitySettings = (fps) => {
+			 console.log(`Applying quality settings for FPS: ${fps.toFixed(1)}`);
   
-			 console.log('Performance Evaluation - Median FPS:', medianFPS);
-			 console.log('All Samples:', fpsSamples);
-  
-			 if (medianFPS < 50 && this.msaaSamples > 0) {
+			 // Disable MSAA if FPS is low
+			 if (fps < 50 && this.msaaSamples > 0) {
 				  this.msaaSamples = 0;
 				  this.resetPostProcessing();
 			 }
   
-			 if (medianFPS < 30) {
+			 // Adjust render resolution
+			 if (fps < 30) {
 				  const targetFPS = 75;
-				  const fpsRatio = Math.min(medianFPS / targetFPS, 1);
+				  const fpsRatio = Math.min(fps / targetFPS, 1);
 				  const potentialPixelRatio = Math.sqrt((this.initialRenderPixelRatio ** 2.8) * fpsRatio);
 				  
 				  this.performantRenderPixelRatio = Math.max(
@@ -371,39 +367,54 @@ class ThreeSceneManager {
 				  );
 			 }
   
+			 // Restart normal rendering
 			 this.startRenderLoop();
 		};
   
-		const sampleFrame = (timestamp) => {
-			 if (!samplingActive) return;
-  
-			 if (!prevTimestamp) prevTimestamp = timestamp;
-			 const elapsed = timestamp - prevTimestamp;
-  
-			 frameCount++;
-  
+		const measureFrame = () => {
+			 // Capture current time first for consistent timing
+			 const now = performance.now();
+			 
+			 // Update scene with current time
 			 this.handleResize();
-			 this.updateScene(timestamp, performance.now());
-			 this.pipeline.render(timestamp);
+			 this.updateScene(now);
+			 this.pipeline.render(now);
   
-			 if (elapsed >= sampleDuration) {
-				  const fps = (frameCount * 1000) / elapsed;
-				  fpsSamples.push(fps);
-  
-				  prevTimestamp = timestamp;
-				  frameCount = 0;
-  
-				  if (fpsSamples.length >= requiredSamples) {
-						samplingActive = false;
-						evaluatePerformance();
-						return;
-				  }
+			 // Initialization phase
+			 if (!startTime) {
+				  startTime = now;
+				  requestAnimationFrame(measureFrame);
+				  return;
 			 }
   
-			 requestAnimationFrame(sampleFrame);
+			 // Warm-up phase
+			 if (!isMeasuring && (now - startTime) < stabilizationTime) {
+				  requestAnimationFrame(measureFrame);
+				  return;
+			 }
+  
+			 // Start measurement
+			 if (!isMeasuring) {
+				  isMeasuring = true;
+				  startTime = now;
+				  frameCount = 0;
+			 }
+  
+			 // Count frames during measurement
+			 frameCount++;
+  
+			 // Final calculation
+			 const elapsed = now - startTime;
+			 if (elapsed >= measureDuration) {
+				  const actualFPS = frameCount / (elapsed / 1000);
+				  console.log(`Measured FPS: ${actualFPS.toFixed(1)}`);
+				  applyQualitySettings(actualFPS);
+			 } else {
+				  requestAnimationFrame(measureFrame);
+			 }
 		};
   
-		requestAnimationFrame(sampleFrame);
+		requestAnimationFrame(measureFrame);
   }
 
 	startRenderLoop() {
@@ -425,10 +436,10 @@ class ThreeSceneManager {
 			}
 
 			this.handleResize();
-			this.updateScene(time, now);
+			this.updateScene(now);
 
 			// this.renderer.render(this.scene, this.camera);
-			this.pipeline.render(time);
+			this.pipeline.render(now);
 
 			requestAnimationFrame(render);
 		};
@@ -479,7 +490,7 @@ class ThreeSceneManager {
 		// this.pipeline.setSize
 	}
 
-	updateScene(time, now) {
+	updateScene(now) {
 		const dt = (now - this.lastFrame) / 1000;
 		if (this.mixer) this.mixer.update(dt);
 		this.controls.update();
