@@ -87,7 +87,6 @@ class OrbitControls extends Controls {
 		this.enableDamping = false;
 		this.dampingFactor = 0.1;
       this.zoomDampingFactor = 0.1;
-		this.zoomDamper = new Damper(70) // 200 ms
 
 		// This option actually enables dollying in and out; left as "zoom" for backwards compatibility.
 		// Set to false to disable zooming
@@ -141,7 +140,12 @@ class OrbitControls extends Controls {
 
 		// current position in spherical coordinates
 		this._spherical = new Spherical();
+		this._goalSpherical = new Spherical();
 		this._sphericalDelta = new Spherical();
+
+		this.radiusDamper = new Damper(70); // 70 ms
+		this.thetaDamper = new Damper(70);
+		this.phiDamper = new Damper(70);
 
 		this._scale = 1;
 		this._panOffset = new Vector3();
@@ -167,8 +171,7 @@ class OrbitControls extends Controls {
 
 		this._controlActive = false;
 
-		this._zoomDelta = 0;
-		this._zoomGoal = this._spherical.radius;
+		// this._zoomDelta = 0;
 
 		// event listeners
 
@@ -191,10 +194,17 @@ class OrbitControls extends Controls {
 		// https://github.com/google/model-viewer/blob/master/packages/model-viewer/src/three-components/SmoothControls.ts
 		this.damperNormalization = {
 			sphericalRadius: this.maximumRadius,
-			sphericalTheta: this.maxPolarAngle,
+			sphericalTheta: Math.PI,
 			sphericalPhi: this.maxPolarAngle,
 			fov: 1
 		}
+
+		// set initial spherical and goalSpherical to be identical
+		_v.copy(this.object.position).sub(this.target);
+		_v.applyQuaternion(this._quat);
+		this._spherical.setFromVector3(_v);
+		this._goalSpherical.copy(this._spherical);
+
 
 		if ( this.domElement !== null ) {
 
@@ -305,21 +315,24 @@ class OrbitControls extends Controls {
 		this.state = _STATE.NONE;
 
 	}
+	
 
 	update( deltaTime = 0 ) {
+		console.log(this._spherical.theta, this._goalSpherical.theta)
 
 		// deltaTime is in seconds
 		const deltaTimeMS = deltaTime * 1000
 
 		const position = this.object.position;
 
-		_v.copy( position ).sub( this.target );
+		// _v.copy( position ).sub( this.target );
 
 		// rotate offset to "y-axis-is-up" space
-		_v.applyQuaternion( this._quat );
+		// _v.applyQuaternion( this._quat );
 
 		// angle from z-axis around y-axis
-		this._spherical.setFromVector3( _v );
+		// this converts theta angles
+		// this._spherical.setFromVector3( _v );
 
 		if ( this.autoRotate && this.state === _STATE.NONE ) {
 
@@ -328,55 +341,39 @@ class OrbitControls extends Controls {
 		}
 
 		if ( this.enableDamping ) {
+			this._spherical.theta = this.thetaDamper.update(
+				this._spherical.theta, this._goalSpherical.theta, deltaTimeMS, this.damperNormalization.sphericalTheta)
 
-			this._spherical.theta += this._sphericalDelta.theta * this.dampingFactor;
-			this._spherical.phi += this._sphericalDelta.phi * this.dampingFactor;
+			this._spherical.phi = this.phiDamper.update(
+				this._spherical.phi, this._goalSpherical.phi, deltaTimeMS, this.damperNormalization.sphericalPhi)
    
          if ( this.object.isPerspectiveCamera || this.object.isOrthographicCamera ) {
-				// console.log(this._scale, this._zoomDelta, this.zoomDampingFactor, deltaTime)
-				// console.log(this._spherical.radius, this._zoomGoal)
-				this._spherical.radius = this.zoomDamper.update(
-					this._spherical.radius, this._zoomGoal, deltaTimeMS, this.damperNormalization.sphericalRadius)
-            // this._scale += this._zoomDelta * this.zoomDampingFactor * deltaTime;
+				this._spherical.radius = this.radiusDamper.update(
+					this._spherical.radius, this._goalSpherical.radius, deltaTimeMS, this.damperNormalization.sphericalRadius)
          }
 
 		} else {
 
-			this._spherical.theta += this._sphericalDelta.theta;
-			this._spherical.phi += this._sphericalDelta.phi;
+			this._spherical.radius = this._goalSpherical.radius;
+			this._spherical.theta = this._goalSpherical.theta;
+			this._spherical.phi = this._goalSpherical.phi;
 
 		}
 
+		if (this._goalSpherical.theta === this._spherical.theta &&
+			this._goalSpherical.phi === this._spherical.phi &&
+			this._goalSpherical.radius === this._spherical.radius) {
+			_v.copy(this.object.position).sub(this.target);
+			_v.applyQuaternion(this._quat);
+			this._spherical.setFromVector3(_v);
+			this._goalSpherical.copy(this._spherical);
+		}
 		
 
-
-		// restrict theta to be between desired limits
-
-		let min = this.minAzimuthAngle;
-		let max = this.maxAzimuthAngle;
-
-		if ( isFinite( min ) && isFinite( max ) ) {
-
-			if ( min < - Math.PI ) min += _twoPI; else if ( min > Math.PI ) min -= _twoPI;
-
-			if ( max < - Math.PI ) max += _twoPI; else if ( max > Math.PI ) max -= _twoPI;
-
-			if ( min <= max ) {
-
-				this._spherical.theta = Math.max( min, Math.min( max, this._spherical.theta ) );
-
-			} else {
-
-				this._spherical.theta = ( this._spherical.theta > ( min + max ) / 2 ) ?
-					Math.max( min, this._spherical.theta ) :
-					Math.min( max, this._spherical.theta );
-
-			}
-
-		}
-
-		// restrict phi to be between desired limits
-		this._spherical.phi = Math.max( this.minPolarAngle, Math.min( this.maxPolarAngle, this._spherical.phi ) );
+		// _goalSpherical should already be properly clamped but just to be safe
+   	this._spherical.theta = this._clampAzimuthAngle(this._spherical.theta);
+   	this._goalSpherical.theta = this._clampAzimuthAngle(this._goalSpherical.theta);
+	   this._spherical.phi = this._clampPolarAngle(this._spherical.phi);
 
 		this._spherical.makeSafe();
 
@@ -424,9 +421,9 @@ class OrbitControls extends Controls {
 
 		if ( this.enableDamping === true ) {
 
-			this._sphericalDelta.theta *= ( 1 - this.dampingFactor );
-			this._sphericalDelta.phi *= ( 1 - this.dampingFactor );
-         this._zoomDelta *= ( 1 - this.zoomDampingFactor * deltaTime );
+			// this._sphericalDelta.theta *= ( 1 - this.dampingFactor );
+			// this._sphericalDelta.phi *= ( 1 - this.dampingFactor );
+         // this._zoomDelta *= ( 1 - this.zoomDampingFactor * deltaTime );
 
 			this._panOffset.multiplyScalar( 1 - this.dampingFactor );
 
@@ -556,6 +553,42 @@ class OrbitControls extends Controls {
 
 	}
 
+	_wrapAngle(radians) {
+		// Wraps to between -pi and pi
+		const normalized = (radians + Math.PI) / (2 * Math.PI);
+		const wrapped = normalized - Math.floor(normalized);
+		return wrapped * 2 * Math.PI - Math.PI;
+  }
+
+	_clampAzimuthAngle(theta) {
+		const min = this.minAzimuthAngle;
+		const max = this.maxAzimuthAngle;
+  
+		if (!isFinite(min) || !isFinite(max)) return theta;
+  
+		let adjustedMin = min;
+		let adjustedMax = max;
+  
+		// Normalize min/max to [-π, π]
+		if (adjustedMin < -Math.PI) adjustedMin += _twoPI;
+		else if (adjustedMin > Math.PI) adjustedMin -= _twoPI;
+		
+		if (adjustedMax < -Math.PI) adjustedMax += _twoPI;
+		else if (adjustedMax > Math.PI) adjustedMax -= _twoPI;
+  
+		if (adjustedMin <= adjustedMax) {
+			 return Math.max(adjustedMin, Math.min(adjustedMax, theta));
+		} else {
+			 const midpoint = (adjustedMin + adjustedMax) * 0.5;
+			 return theta > midpoint ? Math.max(adjustedMin, theta) : Math.min(adjustedMax, theta);
+		}
+  }
+
+	_clampPolarAngle(phi) {
+		return Math.max(this.minPolarAngle, Math.min(this.maxPolarAngle, phi));
+	}
+
+
 	_getAutoRotationAngle( deltaTime ) {
 
 		if ( deltaTime !== null ) {
@@ -579,16 +612,12 @@ class OrbitControls extends Controls {
 
 	}
 
-	_rotateLeft( angle ) {
+	_rotateLeft(angle) {
+		this._goalSpherical.theta = this._clampAzimuthAngle(this._goalSpherical.theta - angle);
+  }
 
-		this._sphericalDelta.theta -= angle;
-
-	}
-
-	_rotateUp( angle ) {
-
-		this._sphericalDelta.phi -= angle;
-
+	_rotateUp(angle) {
+		this._goalSpherical.phi = this._clampPolarAngle(this._goalSpherical.phi - angle);
 	}
 
 	_panLeft( distance, objectMatrix ) {
@@ -659,8 +688,10 @@ class OrbitControls extends Controls {
 		if ( this.object.isPerspectiveCamera || this.object.isOrthographicCamera ) {
 
 			// this._scale /= dollyScale;
-			damping ? this._zoomDelta += dollyScale : this._scale /= dollyScale;
-			damping ? this._zoomGoal = this._clampDistance(this._zoomGoal + dollyScale) : this._scale /= dollyScale;
+			// damping ? this._zoomDelta += dollyScale : this._scale /= dollyScale;
+			damping 
+				? this._goalSpherical.radius = this._clampDistance(this._goalSpherical.radius + dollyScale)
+				: this._scale /= dollyScale;
 
 		} else {
 
@@ -676,10 +707,11 @@ class OrbitControls extends Controls {
 		if ( this.object.isPerspectiveCamera || this.object.isOrthographicCamera ) {
 
 			// this._scale *= dollyScale;
-			damping ? this._zoomDelta -= dollyScale : this._scale *= dollyScale;
-			damping ? this._zoomGoal = this._clampDistance(this._zoomGoal - dollyScale) : this._scale *= dollyScale;
+			// damping ? this._zoomDelta -= dollyScale : this._scale *= dollyScale;
+			damping 
+				? this._goalSpherical.radius = this._clampDistance(this._goalSpherical.radius - dollyScale)
+				: this._scale *= dollyScale;
 			
-
 		} else {
 
 			console.warn( 'WARNING: OrbitControls.js encountered an unknown camera type - dolly/zoom disabled.' );
