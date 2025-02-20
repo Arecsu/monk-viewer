@@ -91,7 +91,7 @@ class OrbitControls extends Controls {
 		// This option actually enables dollying in and out; left as "zoom" for backwards compatibility.
 		// Set to false to disable zooming
 		this.enableZoom = true;
-		this.zoomSpeed = 0.1;
+		this.pinchToZoomSpeed = 0.6;
 		this.zoomSensitivity = 1;
 
 		// Set to false to disable rotating
@@ -143,9 +143,15 @@ class OrbitControls extends Controls {
 		this._goalSpherical = new Spherical();
 		this._sphericalDelta = new Spherical();
 
-		this.radiusDamper = new Damper(70); // 70 ms
-		this.thetaDamper = new Damper(70);
-		this.phiDamper = new Damper(70);
+		this.decayTimeDamper = {
+			radiusScroll: 70, // ms
+			radiusPinch: 20,
+			rotation: 50
+		}
+
+		this.radiusDamper = new Damper(this.decayTimeDamper.radiusScroll);
+		this.thetaDamper = new Damper(this.decayTimeDamper.rotation);
+		this.phiDamper = new Damper(this.decayTimeDamper.rotation);
 
 		this._scale = 1;
 		this._panOffset = new Vector3();
@@ -318,7 +324,7 @@ class OrbitControls extends Controls {
 	
 
 	update( deltaTime = 0 ) {
-		console.log(this._spherical.theta, this._goalSpherical.theta)
+		// console.log(this._spherical.theta, this._goalSpherical.theta)
 
 		// deltaTime is in seconds
 		const deltaTimeMS = deltaTime * 1000
@@ -360,15 +366,7 @@ class OrbitControls extends Controls {
 
 		}
 
-		if (this._goalSpherical.theta === this._spherical.theta &&
-			this._goalSpherical.phi === this._spherical.phi &&
-			this._goalSpherical.radius === this._spherical.radius) {
-			_v.copy(this.object.position).sub(this.target);
-			_v.applyQuaternion(this._quat);
-			this._spherical.setFromVector3(_v);
-			this._goalSpherical.copy(this._spherical);
-		}
-		
+
 
 		// _goalSpherical should already be properly clamped but just to be safe
    	this._spherical.theta = this._clampAzimuthAngle(this._spherical.theta);
@@ -510,6 +508,16 @@ class OrbitControls extends Controls {
 					}
 
 				}
+
+				if (this._goalSpherical.theta === this._spherical.theta &&
+					this._goalSpherical.phi === this._spherical.phi &&
+					this._goalSpherical.radius === this._spherical.radius) {
+					_v.copy(this.object.position).sub(this.target);
+					_v.applyQuaternion(this._quat);
+					this._spherical.setFromVector3(_v);
+					this._goalSpherical.copy(this._spherical);
+				}
+				
 
 			}
 
@@ -683,15 +691,17 @@ class OrbitControls extends Controls {
 
 	}
 
-	_dollyOut( dollyScale, damping = false ) {
+	_dollyOut( dollyScale, damping = false, pinching = false ) {
 
 		if ( this.object.isPerspectiveCamera || this.object.isOrthographicCamera ) {
 
 			// this._scale /= dollyScale;
-			// damping ? this._zoomDelta += dollyScale : this._scale /= dollyScale;
-			damping 
-				? this._goalSpherical.radius = this._clampDistance(this._goalSpherical.radius + dollyScale)
-				: this._scale /= dollyScale;
+			// damping ? this._zoomDelta += do llyScale : this._scale /= dollyScale;
+			pinching 
+				? this._goalSpherical.radius = this._clampDistance(this._goalSpherical.radius / dollyScale)
+				: this._goalSpherical.radius = this._clampDistance(this._goalSpherical.radius + dollyScale)
+			
+			if (!damping) this._spherical.radius = this._goalSpherical.radius;
 
 		} else {
 
@@ -702,16 +712,16 @@ class OrbitControls extends Controls {
 
 	}
 
-	_dollyIn( dollyScale, damping = false  ) {
+	_dollyIn( dollyScale, damping = false, pinching = false  ) {
 
 		if ( this.object.isPerspectiveCamera || this.object.isOrthographicCamera ) {
 
-			// this._scale *= dollyScale;
-			// damping ? this._zoomDelta -= dollyScale : this._scale *= dollyScale;
-			damping 
-				? this._goalSpherical.radius = this._clampDistance(this._goalSpherical.radius - dollyScale)
-				: this._scale *= dollyScale;
+			pinching 
+				? this._goalSpherical.radius = this._clampDistance(this._goalSpherical.radius * dollyScale)
+				: this._goalSpherical.radius = this._clampDistance(this._goalSpherical.radius - dollyScale)
 			
+			if (!damping) this._spherical.radius = this._goalSpherical.radius;
+
 		} else {
 
 			console.warn( 'WARNING: OrbitControls.js encountered an unknown camera type - dolly/zoom disabled.' );
@@ -795,6 +805,8 @@ class OrbitControls extends Controls {
 		this._dollyEnd.set( event.clientX, event.clientY );
 
 		this._dollyDelta.subVectors( this._dollyEnd, this._dollyStart );
+
+		this.radiusDamper.setDecayTime(this.decayTimeDamper.radiusScroll);
 
 		if ( this._dollyDelta.y > 0 ) {
 
@@ -1088,10 +1100,10 @@ class OrbitControls extends Controls {
 		const distance = Math.sqrt( dx * dx + dy * dy );
 
 		this._dollyEnd.set( 0, distance );
+		this._dollyDelta.set( 0, Math.pow( this._dollyEnd.y / this._dollyStart.y, this.pinchToZoomSpeed ) );
 
-		this._dollyDelta.set( 0, Math.pow( this._dollyEnd.y / this._dollyStart.y, this.zoomSpeed ) );
-
-		this._dollyOut( this._dollyDelta.y );
+		this.radiusDamper.setDecayTime(this.decayTimeDamper.radiusPinch);
+		this._dollyOut( this._dollyDelta.y, false, true );
 
 		this._dollyStart.copy( this._dollyEnd );
 
