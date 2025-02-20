@@ -12,6 +12,7 @@ import { HDRJPGLoader } from "@monogrid/gainmap-js";
 // import { SMAAPass } from "./postprocessing/SMAAPass.js"
 // import { TAARenderPass } from 'three/addons/postprocessing/TAARenderPass.js';
 // import { DitheringPass } from "./postprocessing/DitheringPass.js";
+import { DitheringEffect } from "./postprocessing/DitheringEffect"
 import ModShader from "./mod3_meshphysical_complete.glsl?raw"
 // import ModShader2 from "./meshphysical_vertex.glsl?raw"
 
@@ -155,11 +156,11 @@ class ThreeSceneManager {
 				frameBufferType: THREE.HalfFloatType, 
 				samples: this.msaaSamples,
 			}));
-		this.pipeline.add(new EffectPass(
+		const effects = new EffectPass(
 			new BloomEffect(
 				{
 					luminanceSmoothing: 0.4,
-					intensity: 0.2,
+					intensity: 0.8,
 					radius: 1,
 					luminanceThreshold: 0.1,
 					levels: 8
@@ -172,6 +173,8 @@ class ThreeSceneManager {
 					// toneMapping: ToneMapping.AGX
 				}
 			),
+			new DitheringEffect(),
+
 			/*
 			new SMAAEffect(
 				{
@@ -179,7 +182,9 @@ class ThreeSceneManager {
 				}
 			)
 			*/
-		));
+		)
+		// effects.dithering = true; // does nothing
+		this.pipeline.add(effects);
 	}
 
 	resetPostProcessing() {
