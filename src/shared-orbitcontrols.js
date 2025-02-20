@@ -354,13 +354,13 @@ class ThreeSceneManager {
 			 if (fps < 50 && this.msaaSamples > 0) {
 				  this.msaaSamples = 0;
 				  this.resetPostProcessing();
-			 }
+			//  }
   
-			 // Adjust render resolution
-			 if (fps < 30) {
+			// Adjust render resolution
+			//  if (fps < 40) {
 				  const targetFPS = 75;
 				  const fpsRatio = Math.min(fps / targetFPS, 1);
-				  const potentialPixelRatio = Math.sqrt((this.initialRenderPixelRatio ** 2.8) * fpsRatio);
+				  const potentialPixelRatio = Math.sqrt((this.initialRenderPixelRatio ** 2.0) * fpsRatio);
 				  
 				  this.performantRenderPixelRatio = Math.max(
 						0.8,
