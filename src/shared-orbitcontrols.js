@@ -17,6 +17,7 @@ import ModShader from "./mod3_meshphysical_complete.glsl?raw"
 // import ModShader2 from "./meshphysical_vertex.glsl?raw"
 
 import { BloomEffect, RenderPipeline, ClearPass, GeometryPass, EffectPass, ToneMappingEffect, ToneMapping } from "postprocessing";
+import { NoiseEffect } from "./postprocessing/NoiseEffect"
 // import { SMAAEffect, SMAAPreset } from "postprocessing"
 
 // import artworkModelUrl from "./McLovin-1024x.glb?url";
@@ -169,11 +170,10 @@ class ThreeSceneManager {
 			new ToneMappingEffect(
 				{
 					toneMapping: ToneMapping.REINHARD
-					// toneMapping: ToneMapping.ACES_FILMIC
-					// toneMapping: ToneMapping.AGX
 				}
 			),
 			new DitheringEffect(),
+			// new NoiseEffect(),
 
 			/*
 			new SMAAEffect(
