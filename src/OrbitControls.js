@@ -26,6 +26,7 @@ const _endEvent = { type: 'end' };
 const _ray = new Ray();
 const _plane = new Plane();
 const _TILT_LIMIT = Math.cos( 70 * MathUtils.DEG2RAD );
+const ZOOM_SENSITIVITY = 0.04;
 
 const _v = new Vector3();
 const _twoPI = 2 * Math.PI;
@@ -92,7 +93,7 @@ class OrbitControls extends Controls {
 		// Set to false to disable zooming
 		this.enableZoom = true;
 		this.zoomSpeed = 0.1;
-		this.zoomScale = 0.08;
+		this.zoomSensitivity = 1;
 
 		// Set to false to disable rotating
 		this.enableRotate = true;
@@ -333,7 +334,7 @@ class OrbitControls extends Controls {
    
          if ( this.object.isPerspectiveCamera || this.object.isOrthographicCamera ) {
 				// console.log(this._scale, this._zoomDelta, this.zoomDampingFactor, deltaTime)
-				console.log(this._spherical.radius, this._zoomGoal)
+				// console.log(this._spherical.radius, this._zoomGoal)
 				this._spherical.radius = this.zoomDamper.update(
 					this._spherical.radius, this._zoomGoal, deltaTimeMS, this.damperNormalization.sphericalRadius)
             // this._scale += this._zoomDelta * this.zoomDampingFactor * deltaTime;
@@ -570,9 +571,11 @@ class OrbitControls extends Controls {
 	}
 
 	_getZoomScale( delta ) {
-
-		const normalizedDelta = Math.abs( delta * 0.01 );
-		return Math.pow( 0.95, this.zoomSpeed * normalizedDelta ) * this.zoomScale;
+		const normalizedDelta = Math.abs( delta );
+		// const asd = Math.pow(2.0, normalizedDelta ) * this.zoomSensitivity / 10000;
+		return normalizedDelta * ZOOM_SENSITIVITY * this.zoomSensitivity / 30;
+		// const asd = normalizedDelta * this.zoomSensitivity / 10000;
+		// console.log(delta, asd)
 
 	}
 
@@ -1156,17 +1159,7 @@ class OrbitControls extends Controls {
 			deltaY: event.deltaY,
 		};
 
-		switch ( mode ) {
-
-			case 1: // LINE_MODE
-				newEvent.deltaY *= 16;
-				break;
-
-			case 2: // PAGE_MODE
-				newEvent.deltaY *= 100;
-				break;
-
-		}
+		newEvent.deltaY *= mode == 1 ? 18 : 1
 
 		// detect if event was triggered by pinching
 		if ( event.ctrlKey && ! this._controlActive ) {
