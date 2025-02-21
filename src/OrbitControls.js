@@ -146,7 +146,7 @@ class OrbitControls extends Controls {
 		this.decayTimeDamper = {
 			radiusScroll: 70, // ms
 			radiusPinch: 20,
-			rotation: 50
+			rotation: 58
 		}
 
 		this.radiusDamper = new Damper(this.decayTimeDamper.radiusScroll);
