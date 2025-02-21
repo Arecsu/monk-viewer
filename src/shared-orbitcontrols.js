@@ -106,7 +106,7 @@ class ThreeSceneManager {
 	setupRenderer() {
 		this.renderer = new THREE.WebGLRenderer({
 			powerPreference: "high-performance",
-			antialias: true,
+			antialias: false,
 			canvas: this.canvas,
 			stencil: false,
 			depth: false,
@@ -348,10 +348,9 @@ class ThreeSceneManager {
 	}
 
 	startPerformanceSamplingLoop() {
-		const stabilizationTime = 400; // Warm-up period
-		const measureDuration = 500;   // Active measurement window
+		const stabilizationTime = 0.4; // Warm-up period in seconds
+		const measureDuration = 0.5;   // Active measurement window in seconds
 		
-		let startTime = null;
 		let frameCount = 0;
 		let isMeasuring = false;
   
@@ -359,13 +358,13 @@ class ThreeSceneManager {
 			 console.log(`Applying quality settings for FPS: ${fps.toFixed(1)}`);
   
 			 // Disable MSAA if FPS is low
-			 if (fps < 50 && this.msaaSamples > 0) {
+			 if (fps < 55 && this.msaaSamples > 0) {
 				  this.msaaSamples = 0;
 				  this.resetPostProcessing();
-			//  }
+			 }
   
 			// Adjust render resolution
-			//  if (fps < 40) {
+			 if (fps < 45) {
 				  const targetFPS = 75;
 				  const fpsRatio = Math.min(fps / targetFPS, 1);
 				  const potentialPixelRatio = Math.sqrt((this.initialRenderPixelRatio ** 2.0) * fpsRatio);
@@ -376,30 +375,20 @@ class ThreeSceneManager {
 				  );
 			 }
   
-			 // Restart normal rendering
-			 this.startRenderLoop();
 		};
   
 		const measureFrame = () => {
 			 // Capture current time first for consistent 
 			 // performance.now() gives a better perceived
 			 // FPS timing than rAF which might be off-sync sometimes
-			 const now = performance.now();
 			 
 			 // Update scene with current time
 			 this.handleResize();
 			 this.updateScene();
 			 this.pipeline.render();
   
-			 // Initialization phase
-			 if (!startTime) {
-				  startTime = now;
-				  requestAnimationFrame(measureFrame);
-				  return;
-			 }
-  
 			 // Warm-up phase
-			 if (!isMeasuring && (now - startTime) < stabilizationTime) {
+			 if (!isMeasuring && (this.clock.getElapsedTime()) < stabilizationTime) {
 				  requestAnimationFrame(measureFrame);
 				  return;
 			 }
@@ -407,7 +396,6 @@ class ThreeSceneManager {
 			 // Start measurement
 			 if (!isMeasuring) {
 				  isMeasuring = true;
-				  startTime = now;
 				  frameCount = 0;
 			 }
   
@@ -415,17 +403,20 @@ class ThreeSceneManager {
 			 frameCount++;
   
 			 // Final calculation
-			 const elapsed = now - startTime;
+			 const elapsed = this.clock.getElapsedTime() - stabilizationTime;
 			 if (elapsed >= measureDuration) {
-				  const actualFPS = frameCount / (elapsed / 1000);
+				  const actualFPS = frameCount / (elapsed);
 				  console.log(`Measured FPS: ${actualFPS.toFixed(1)}`);
 				  applyQualitySettings(actualFPS);
+				this.startRenderLoop();
+
 			 } else {
 				  requestAnimationFrame(measureFrame);
 			 }
 		};
  		
 		// Set timer to start counting the animation from there
+		this.clock.start();
 		requestAnimationFrame(measureFrame);
   }
 
