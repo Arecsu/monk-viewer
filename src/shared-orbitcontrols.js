@@ -24,6 +24,8 @@ import { NoiseEffect } from "./postprocessing/NoiseEffect"
 import artworkModelUrl from "./McLovin-1024x-2.glb?url";
 // import artworkModelUrl from "./McLovin-1024x-bevel.glb?url";
 // import HDRIMAP from "./old_bus_depot_2k_HDR.jpg?url";
+import HDRIMAP from "./old_bus_depot_4k_blur.jpg?url";
+// import HDRIMAP from "./old_bus_depot_4k.jpg?url";
 // import HDRIMAP from "./hanger_exterior_cloudy_4k.jpg?url";
 
 
@@ -47,7 +49,8 @@ class ThreeSceneManager {
 		this.inputElement = data.inputElement;
 		this.modelUrl = data.modelUrl;
 		// this.modelUrl = artworkModelUrl;
-		this.envmapUrl = data.envmapUrl;
+		// this.envmapUrl = data.envmapUrl;
+		this.envmapUrl = HDRIMAP;
 		this.lowPerformanceSettings = {
 			 disableAA: data.lowPerformanceSettings?.disableAA ?? false,
 			 lowResolution: data.lowPerformanceSettings?.lowResolution ?? false
@@ -73,10 +76,10 @@ class ThreeSceneManager {
 		this.controls = null;
 		this.mixer = null;
 		this.pickHelper = null;
-		this.lastResizeTime = null;
+		this.lastResizeTime = 0;
 		this.throttleResize = 150; // miliseconds
 
-		this.lastFrame = performance.now();
+		this.clock = new THREE.Clock();
 		this.hasAborted = false;
 		this.initScene();
 
@@ -320,8 +323,8 @@ class ThreeSceneManager {
 				const hdrTexture = hdri.renderTarget.texture;
 				this.configureHDRTexture(hdrTexture);
 				// this.scene.background = hdrTexture
-				// this.scene.backgroundBlurriness = 0.8
-				// this.scene.backgroundIntensity = 0.4
+				// this.scene.backgroundBlurriness = 0.8;
+				// this.scene.backgroundIntensity = 0.4;
 				this.scene.environment = hdrTexture;
 				// this.scene.environmentRotation = new THREE.Euler(0.0, -2.37, 0.0);
 				// this.scene.environmentRotation = new THREE.Euler(-5.045, -2.37, 1.0);
@@ -378,13 +381,15 @@ class ThreeSceneManager {
 		};
   
 		const measureFrame = () => {
-			 // Capture current time first for consistent timing
+			 // Capture current time first for consistent 
+			 // performance.now() gives a better perceived
+			 // FPS timing than rAF which might be off-sync sometimes
 			 const now = performance.now();
 			 
 			 // Update scene with current time
 			 this.handleResize();
-			 this.updateScene(now);
-			 this.pipeline.render(now);
+			 this.updateScene();
+			 this.pipeline.render();
   
 			 // Initialization phase
 			 if (!startTime) {
@@ -419,36 +424,18 @@ class ThreeSceneManager {
 				  requestAnimationFrame(measureFrame);
 			 }
 		};
-  
+ 		
+		// Set timer to start counting the animation from there
 		requestAnimationFrame(measureFrame);
   }
 
 	startRenderLoop() {
-		let prevTime = 0;
-		let frames = 0;
-		const maxSamples = 5;
-
-		const render = (time) => {
-			time *= 0.001;
-			const now = performance.now();
-
-			frames++;
-
-			if (time >= prevTime + 1) { // 0.1 second has passed
-				const fps = frames / (time - prevTime);
-				// console.log(fps)
-				prevTime = time;
-				frames = 0;
-			}
-
+		const render = () => {
 			this.handleResize();
-			this.updateScene(now);
-
-			// this.renderer.render(this.scene, this.camera);
-			this.pipeline.render(now);
-
+			this.updateScene();
+			this.pipeline.render();
 			requestAnimationFrame(render);
-		};
+		}
 		requestAnimationFrame(render);
 	}
 
@@ -496,11 +483,11 @@ class ThreeSceneManager {
 		// this.pipeline.setSize
 	}
 
-	updateScene(now) {
-		const dt = (now - this.lastFrame) / 1000;
+	updateScene() {
+		const dt = this.clock.getDelta();
+		// Optionally: console.log(dt);
 		if (this.mixer) this.mixer.update(dt);
 		this.controls.update(dt);
-		this.lastFrame = now;
 	}
 
 	getCanvasRelativePosition(event) {
