@@ -1,52 +1,96 @@
 import { Uniform } from "three";
 import { Effect } from "postprocessing";
+import { DitheringType } from "./enums/DitheringType";
 
 import fragmentShader from "./dithering.frag?raw";
 
 /**
- * VignetteEffect options.
+ * DitheringEffect options.
  *
  * @category Effects
  */
 
 export interface DitheringEffectOptions {
 
-	/**
-	 * The Vignette offset.
-	 *
-	 * @defaultValue 5.0
-	 */
+    /**
+     * The dithering intensity.
+     *
+     * @defaultValue 1.0
+     */
 
-	intensity?: number;
+    intensity?: number;
 
+    /**
+     * The dithering type.
+     *
+     * @defaultValue DitheringType.LUMABASED
+     */
 
+    ditheringType?: DitheringType;
 }
 
 /**
- * A vignette effect.
+ * A dithering effect.
  *
  * @category Effects
  */
 
 export class DitheringEffect extends Effect {
 
-	/**
-	 * Constructs a new vignette effect.
-	 *
-	 * @param options - The options.
-	 */
+    /**
+     * Constructs a new dithering effect.
+     *
+     * @param options - The options.
+     */
 
-	constructor({
-		intensity = 3.0,
-	}: DitheringEffectOptions = {}) {
+    constructor({
+        intensity = 1.0,
+        ditheringType = DitheringType.LUMABASED
+    }: DitheringEffectOptions = {}) {
 
-		super("DitheringEffectOptions");
+        super("DitheringEffect");
 
-		this.fragmentShader = fragmentShader
+        this.fragmentShader = fragmentShader;
+        this.ditheringType = ditheringType;
 
-		const uniforms = this.input.uniforms;
-		uniforms.set("intensity", new Uniform(intensity / 1000));
+        this.input.uniforms.set("intensity", new Uniform(intensity));
+    }
 
-	}
+    /**
+     * The dithering type.
+     */
+
+    get ditheringType(): DitheringType {
+
+        return this.input.defines.get("DITHERING_TYPE") as DitheringType;
+
+    }
+
+    set ditheringType(value: DitheringType) {
+
+        if(this.ditheringType !== value) {
+
+            this.input.defines.set("DITHERING_TYPE", value);
+            this.setChanged();
+
+        }
+
+    }
+
+    /**
+     * The dithering intensity.
+     */
+
+    get intensity(): number {
+
+        return this.input.uniforms.get("intensity")!.value as number;
+
+    }
+
+    set intensity(value: number) {
+
+        this.input.uniforms.get("intensity")!.value = value;
+
+    }
 
 }

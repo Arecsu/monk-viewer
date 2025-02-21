@@ -164,7 +164,7 @@ class ThreeSceneManager {
 			new BloomEffect(
 				{
 					luminanceSmoothing: 0.4,
-					intensity: 0.2,
+					intensity: 0.3,
 					radius: 1,
 					luminanceThreshold: 0.1,
 					levels: 8
