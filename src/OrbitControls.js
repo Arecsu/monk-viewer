@@ -141,6 +141,7 @@ class OrbitControls extends Controls {
 		// current position in spherical coordinates
 		this._spherical = new Spherical();
 		this._goalSpherical = new Spherical();
+		this._initialSpherical = new Spherical();
 		this._sphericalDelta = new Spherical();
 
 		this.decayTimeDamper = {
@@ -210,6 +211,7 @@ class OrbitControls extends Controls {
 		_v.applyQuaternion(this._quat);
 		this._spherical.setFromVector3(_v);
 		this._goalSpherical.copy(this._spherical);
+		this._initialSpherical.copy(this._spherical);
 
 
 		if ( this.domElement !== null ) {
@@ -319,6 +321,13 @@ class OrbitControls extends Controls {
 		// this.update();
 
 		this.state = _STATE.NONE;
+
+	}
+
+	returnToInit() {
+		console.log(this._goalSpherical);
+		this._goalSpherical.copy(this._initialSpherical);
+		console.log(this._goalSpherical);
 
 	}
 	

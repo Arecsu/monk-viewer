@@ -74,10 +74,39 @@ class ThreeSceneManager {
 		this.renderer = null;
 		this.pipeline = null;
 		this.controls = null;
+		this.model = null;
 		this.mixer = null;
 		this.pickHelper = null;
 		this.lastResizeTime = 0;
 		this.throttleResize = 150; // miliseconds
+
+		this.rotationParams = {
+			easeFunc: ((t) => t * t * (3 - 2 * t)), // Default cubic easing
+			duration: 3, // Seconds to reach max speed
+			maxSpeed: Math.PI/3, // Radians per second
+			startTime: null,
+			currentSpeed: 0
+		 };
+
+		this.initialModelRotation = null;
+		this.returnAnimation = {
+			isActive: false,
+			startQuaternion: null,
+			targetQuaternion: null,
+			startTime: 0,
+			duration: 1.0 // seconds for the return animation
+		};
+
+		this.interactionState = {
+			startX: 0,
+			startY: 0,
+			startTime: 0,
+			isDragging: false,
+			dragThreshold: 5, // pixels of movement to consider a drag
+			clickTimeThreshold: 300 // max milliseconds for a click
+		};
+		
+		this.isInteractive = false;
 
 		this.clock = new THREE.Clock();
 		this.hasAborted = false;
@@ -90,18 +119,19 @@ class ThreeSceneManager {
 		this.setupCamera();
 		this.setupControls();
 		this.setupScene();
-		//   this.setupLighting();
-		this.setupPostProcessing();
-		this.setupInteraction();
-		this.loadAssets()
-			.then(() => {
-				this.startPerformanceSamplingLoop();
-				// this.startRenderLoop();
-			})
-			.catch((error) => {
-				this.abortLoading(error);
-			});
-	}
+		// this.setupLighting();
+	 
+		Promise.all([
+		  this.setupPostProcessing(),
+		  this.loadAssets()
+		])
+		  .then(() => {
+			 this.startPerformanceSamplingLoop();
+		  })
+		  .catch((error) => {
+			 this.abortLoading(error);
+		  });
+	 }
 
 	setupRenderer() {
 		this.renderer = new THREE.WebGLRenderer({
@@ -152,43 +182,38 @@ class ThreeSceneManager {
 	}
 
 	setupPostProcessing() {
-		this.pipeline = new RenderPipeline(this.renderer);
-		this.pipeline.add(new ClearPass());
-		this.pipeline.add(new GeometryPass(
-			this.scene, this.camera, 
-			{ 
-				frameBufferType: THREE.HalfFloatType, 
+		return new Promise((resolve, reject) => {
+		  this.pipeline = new RenderPipeline(this.renderer);
+		  this.pipeline.add(new ClearPass());
+		  this.pipeline.add(
+			 new GeometryPass(this.scene, this.camera, {
+				frameBufferType: THREE.HalfFloatType,
 				samples: this.msaaSamples,
-			}));
-		const effects = new EffectPass(
-			new BloomEffect(
-				{
-					luminanceSmoothing: 0.4,
-					intensity: 0.3,
-					radius: 1,
-					luminanceThreshold: 0.1,
-					levels: 8
-				}
-			),
-			new ToneMappingEffect(
-				{
-					toneMapping: ToneMapping.REINHARD
-				}
-			),
-			new DitheringEffect(),
-			// new NoiseEffect(),
-
-			/*
-			new SMAAEffect(
-				{
-					preset: SMAAPreset.HIGH
-				}
-			)
-			*/
-		)
-		// effects.dithering = true; // does nothing
-		this.pipeline.add(effects);
-	}
+			 })
+		  );
+		  const effects = new EffectPass(
+			 new BloomEffect({
+				luminanceSmoothing: 0.4,
+				intensity: 0.3,
+				radius: 1,
+				luminanceThreshold: 0.1,
+				levels: 8,
+			 }),
+			 new ToneMappingEffect({
+				toneMapping: ToneMapping.REINHARD,
+			 }),
+			 new DitheringEffect()
+		  );
+		  this.pipeline.add(effects);
+	 
+		  this.pipeline
+			 .compile()
+			 .then(() => resolve())
+			 .catch((error) =>
+				reject("Failed to compile postprocessing pipeline: " + error)
+			 );
+		});
+	 }
 
 	resetPostProcessing() {
 		this.pipeline.dispose();
@@ -200,43 +225,96 @@ class ThreeSceneManager {
 	}
 
 	setupInteraction() {
-		this.pickPosition = { x: -2, y: -2 };
-		this.pickHelper = new PickHelper();
-		this.clearPickPosition();
-
-		this.inputElement.addEventListener(
-			"mousemove",
-			this.setPickPosition.bind(this),
-		);
-		this.inputElement.addEventListener(
-			"mouseout",
-			this.clearPickPosition.bind(this),
-		);
-		this.inputElement.addEventListener(
-			"mouseleave",
-			this.clearPickPosition.bind(this),
-		);
-		this.inputElement.addEventListener("contextmenu", () => {
-			console.log("hi");
-		});
-
-		this.setupTouchEvents();
+		this.inputElement.addEventListener("contextmenu", (e) => e.preventDefault());
+		
+		// Mouse events
+		this.inputElement.addEventListener("mousedown", this.handleInputStart.bind(this));
+		this.inputElement.addEventListener("mousemove", this.handleInputMove.bind(this));
+		this.inputElement.addEventListener("mouseup", this.handleInputEnd.bind(this));
+		
+		// Touch events
+		this.inputElement.addEventListener("touchstart", this.handleInputStart.bind(this), { passive: false });
+		this.inputElement.addEventListener("touchmove", this.handleInputMove.bind(this));
+		this.inputElement.addEventListener("touchend", this.handleInputEnd.bind(this));
 	}
 
-	setupTouchEvents() {
-		this.inputElement.addEventListener("touchstart", (event) => {
-			event.preventDefault();
-			this.setPickPosition(event.touches[0]);
-		}, { passive: false });
-
-		this.inputElement.addEventListener("touchmove", (event) => {
-			this.setPickPosition(event.touches[0]);
-		});
-
-		this.inputElement.addEventListener("touchend", () => {
-			this.clearPickPosition();
-		});
+	handleInputStart(event) {
+		// Prevent default for touch events to avoid scrolling
+		if (event.type === "touchstart") event.preventDefault();
+		
+		// Get position
+		const pos = event.type.startsWith("touch") 
+			? { x: event.touches[0].clientX, y: event.touches[0].clientY }
+			: { x: event.clientX, y: event.clientY };
+			
+		// Store starting position and time
+		this.interactionState.startX = pos.x;
+		this.interactionState.startY = pos.y;
+		this.interactionState.startTime = performance.now();
+		this.interactionState.isDragging = false;
+		
 	}
+
+	handleInputMove(event) {
+		// If we're not tracking an interaction, exit
+		if (this.interactionState.startTime === 0) return;
+		
+		// Get current position
+		const pos = event.type.startsWith("touch")
+			? { x: event.touches[0].clientX, y: event.touches[0].clientY }
+			: { x: event.clientX, y: event.clientY };
+			
+		// Calculate distance moved
+		const dx = pos.x - this.interactionState.startX;
+		const dy = pos.y - this.interactionState.startY;
+		const distance = Math.sqrt(dx * dx + dy * dy);
+		
+		// If we've moved beyond threshold, mark as dragging
+		if (distance > this.interactionState.dragThreshold) {
+			this.interactionState.isDragging = true;
+		}
+	}
+
+	handleInputEnd(event) {
+		// Calculate how long the interaction lasted
+		const duration = performance.now() - this.interactionState.startTime;
+		
+		// If it was short and not a drag, it's a click
+		if (duration < this.interactionState.clickTimeThreshold && !this.interactionState.isDragging) {
+			this.toggleInteractiveMode();
+		}
+		
+		// Reset tracking state
+		this.interactionState.startTime = 0;
+		this.interactionState.isDragging = false;
+	}
+
+	toggleInteractiveMode() {
+		this.isInteractive = !this.isInteractive;
+
+		if (this.isInteractive) {
+		  this.controls.connect();
+		  this.startReturnAnimation();
+		} else {
+		  this.controls.disconnect();
+		  this.returnAnimation.isActive = false;
+		  this.rotationParams.startTime = null; // Reset acceleration phase
+		  // Reset camera and controls to initial state
+		//   this.camera.position.copy(this.initialCameraPosition);
+		//   this.controls.target.copy(this.initialControlsTarget);
+			this.controls.returnToInit();
+		}
+	 }
+	 
+	 startReturnAnimation() {
+		if (!this.model || !this.initialModelRotation) return;
+		if (this.model.quaternion.equals(this.initialModelRotation)) return;
+	 
+		this.returnAnimation.isActive = true;
+		this.returnAnimation.startQuaternion = this.model.quaternion.clone();
+		this.returnAnimation.targetQuaternion = this.initialModelRotation.clone();
+		this.returnAnimation.startTime = this.clock.getElapsedTime();
+	 }
 
 	abortLoading(error) {
 		console.error("Aborting scene loading:", error);
@@ -258,14 +336,15 @@ class ThreeSceneManager {
 			const loader = new GLTFLoader();
 			loader.load(this.modelUrl, async (gltf) => {
 				if (this.hasAborted) return;
-				const model = gltf.scene;
+				this.model = gltf.scene;
 				// model.rotation.y -= 0.6;
 				// model.rotation.x += 0.25;
 				// model.rotation.z -= 0.4;
-				model.scale.set(1, 1, 1);
+				this.model.scale.set(1, 1, 1);
+				this.initialModelRotation = this.model.quaternion.clone();
 
 				/*
-				model.traverse((child) => {
+				this.model.traverse((child) => {
 					if (child.material) {
 						child.material.needsUpdate = true
 						child.material.onBeforeCompile = (shader) => {
@@ -277,15 +356,15 @@ class ThreeSceneManager {
 				*/
 				
 
-				this.optimizeModelTextures(model);
+				this.optimizeModelTextures(this.model);
 
-				await this.renderer.compileAsync(model, this.camera, this.scene);
+				await this.renderer.compileAsync(this.model, this.camera, this.scene);
 
-				this.mixer = new THREE.AnimationMixer(model);
+				this.mixer = new THREE.AnimationMixer(this.model);
 				const action = this.mixer.clipAction(gltf.animations[0]);
 				// action.play();
 
-				this.scene.add(model);
+				this.scene.add(this.model);
 				resolve();
 			},      
 			undefined,
@@ -348,7 +427,7 @@ class ThreeSceneManager {
 	}
 
 	startPerformanceSamplingLoop() {
-		const stabilizationTime = 0.4; // Warm-up period in seconds
+		const stabilizationTime = 1.0; // Warm-up period in seconds
 		const measureDuration = 0.5;   // Active measurement window in seconds
 		
 		let frameCount = 0;
@@ -405,11 +484,10 @@ class ThreeSceneManager {
 			 // Final calculation
 			 const elapsed = this.clock.getElapsedTime() - stabilizationTime;
 			 if (elapsed >= measureDuration) {
-				  const actualFPS = frameCount / (elapsed);
-				  console.log(`Measured FPS: ${actualFPS.toFixed(1)}`);
-				  applyQualitySettings(actualFPS);
+				const actualFPS = frameCount / (elapsed);
+				console.log(`Measured FPS: ${actualFPS.toFixed(1)}`);
+				applyQualitySettings(actualFPS);
 				this.startRenderLoop();
-
 			 } else {
 				  requestAnimationFrame(measureFrame);
 			 }
@@ -417,6 +495,7 @@ class ThreeSceneManager {
  		
 		// Set timer to start counting the animation from there
 		this.clock.start();
+		this.setupInteraction();
 		requestAnimationFrame(measureFrame);
   }
 
@@ -477,8 +556,58 @@ class ThreeSceneManager {
 	updateScene() {
 		const dt = this.clock.getDelta();
 		// Optionally: console.log(dt);
+		if (this.model) {
+			if (this.isInteractive) {
+			  if (this.returnAnimation.isActive) {
+				 this.updateReturnAnimation(dt);
+			  }
+			} else {
+			  this.autoRotateModel(dt);
+			}
+		 }
 		if (this.mixer) this.mixer.update(dt);
+		// if (this.isInteractive) this.controls.update(dt);
 		this.controls.update(dt);
+	}
+
+	updateReturnAnimation(dt) {
+		const elapsed = this.clock.getElapsedTime() - this.returnAnimation.startTime;
+		const t = Math.min(elapsed / this.returnAnimation.duration, 1);
+		const easedT = 1 - Math.pow(1 - t, 3); // Cubic ease-out
+	 
+		const quat = new THREE.Quaternion();
+		quat.copy(this.returnAnimation.startQuaternion).slerp(
+		  this.returnAnimation.targetQuaternion,
+		  easedT
+		);
+		this.model.quaternion.copy(quat);
+	 
+		if (t >= 1) {
+		  this.returnAnimation.isActive = false;
+		}
+	 }
+
+autoRotateModel(dt) {
+		const now = this.clock.getElapsedTime();
+		
+		// Initialize start time on first frame
+		if (this.rotationParams.startTime === null) {
+			this.rotationParams.startTime = now;
+		}
+
+		// Calculate time since animation started
+		const elapsed = now - this.rotationParams.startTime;
+		
+		// Calculate progress through acceleration phase
+		const t = Math.min(elapsed / this.rotationParams.duration, 1);
+		
+		// Get eased progress
+		const progress = this.rotationParams.easeFunc(t);
+		
+		// Calculate current rotation speed
+		this.rotationParams.currentSpeed = progress * this.rotationParams.maxSpeed;
+		
+		this.model.rotateY(-this.rotationParams.currentSpeed * dt);
 	}
 
 	getCanvasRelativePosition(event) {

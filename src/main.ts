@@ -114,6 +114,7 @@ const createEventHandlers = () => {
       e.preventDefault()
       return { type: e.type }
     }),
+    click:        createHandler<MouseEvent>(mouseEventHandler),
     mousedown:    createHandler<MouseEvent>(mouseEventHandler),
     mousemove:    createHandler<MouseEvent>(mouseEventHandler),
     mouseup:      createHandler<MouseEvent>(mouseEventHandler),
