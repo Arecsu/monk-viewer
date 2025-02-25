@@ -14,6 +14,9 @@ importers:
       '@types/three':
         specifier: ^0.170.0
         version: 0.170.0
+      js-easing-functions:
+        specifier: ^1.0.3
+        version: 1.0.3
       postprocessing:
         specifier: 7.0.0-beta.6
         version: 7.0.0-beta.6(three@0.173.0)
@@ -423,6 +426,9 @@ packages:
 
   is-promise@2.2.2:
     resolution: {integrity: sha512-+lP4/6lKUBfQjZ2pdxThZvLUAafmZb8OAxFb8XXtiQmS35INgr85hdOGoEs124ez1FCnZJt6jau/T+alh58QFQ==}
+
+  js-easing-functions@1.0.3:
+    resolution: {integrity: sha512-skDTLPuwWvAVYQVPwmjcFuCv8i8jtVD4L4FELxICwbS1HWFhs+627vOdDhQUGJMe9os6QO2XgEI4qb5umiUQFg==}
 
   jsonfile@6.1.0:
     resolution: {integrity: sha512-5dgndWOriYSm5cnYaJNhalLNDKOqFwyDB/rr1E9ZsGciGvKPs8R2xYGCacuf3z6K1YKDz182fd+fY3cn3pMqXQ==}
@@ -890,6 +896,8 @@ snapshots:
   is-number@7.0.0: {}
 
   is-promise@2.2.2: {}
+
+  js-easing-functions@1.0.3: {}
 
   jsonfile@6.1.0:
     dependencies:

@@ -14,8 +14,9 @@
  */
 
 export const SETTLING_TIME = 10000;  // plenty long enough
-const MIN_DECAY_MILLISECONDS = 0.001;
-export const DECAY_MILLISECONDS = 50;
+const MIN_TIME_CONSTANT_MILLISECONDS = 0.001;
+const SETTLING_TIME_CONSTANT = 8.5;
+export const TIME_CONSTANT_MILLISECONDS = 50;
 
 /**
  * The Damper class is a generic second-order critically damped system that does
@@ -29,13 +30,18 @@ export class Damper {
   private velocity: number = 0;
   private naturalFrequency: number = 0;
 
-  constructor(decayMilliseconds: number = DECAY_MILLISECONDS) {
-    this.setDecayTime(decayMilliseconds);
+  constructor(timeConstantMilliseconds: number = TIME_CONSTANT_MILLISECONDS) {
+    this.setDecayConstant(timeConstantMilliseconds);
   }
 
-  setDecayTime(decayMilliseconds: number) {
+  setDecayConstant(timeConstantMilliseconds: number) {
     this.naturalFrequency =
-        1 / Math.max(MIN_DECAY_MILLISECONDS, decayMilliseconds);
+        1 / Math.max(MIN_TIME_CONSTANT_MILLISECONDS, timeConstantMilliseconds);
+  }
+
+  getApproximateDecayTime(): number {
+    const timeConstant = 1 / this.naturalFrequency;
+    return timeConstant * SETTLING_TIME_CONSTANT;
   }
 
   update(

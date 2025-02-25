@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { easeInOutCubic, easeInOutBack } from 'js-easing-functions';
 // import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { OrbitControls } from "./OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
@@ -25,6 +26,17 @@ import artworkModelUrl from "./McLovin-1024x-2.glb?url";
 // import artworkModelUrl from "./McLovin-1024x-bevel.glb?url";
 // import HDRIMAP from "./old_bus_depot_2k_HDR.jpg?url";
 import HDRIMAP from "./old_bus_depot_4k_blur.jpg?url";
+// import HDRIMAP from "./the_sky_is_on_fire_4k.jpg?url";
+// import HDRIMAP from "./urban_alley_01_16k.jpg?url";
+// import HDRIMAP from "./the_sky_is_on_fire_4k-q.jpg?url";
+import { easeInQuint } from "js-easing-functions";
+import { easeInExpo } from "js-easing-functions";
+import { easeInCubic } from "js-easing-functions";
+import { easeOutQuint } from "js-easing-functions";
+import { easeOutBack } from "js-easing-functions";
+import { easeOutExpo } from "js-easing-functions";
+import { easeOutCubic } from "js-easing-functions";
+import { easeOutQuart } from "js-easing-functions";
 // import HDRIMAP from "./old_bus_depot_4k.jpg?url";
 // import HDRIMAP from "./hanger_exterior_cloudy_4k.jpg?url";
 
@@ -80,22 +92,25 @@ class ThreeSceneManager {
 		this.lastResizeTime = 0;
 		this.throttleResize = 150; // miliseconds
 
-		this.rotationParams = {
-			easeFunc: ((t) => t * t * (3 - 2 * t)), // Default cubic easing
-			duration: 3, // Seconds to reach max speed
-			maxSpeed: Math.PI/3, // Radians per second
+		this.rotationModelParams = {
+			easeFunc: easeInCubic,  
+			duration: 1.5,               // Seconds to reach max speed
+			maxSpeed: Math.PI / 3,     // Radians per second
 			startTime: null,
 			currentSpeed: 0
 		 };
+		 
 
 		this.initialModelRotation = null;
-		this.returnAnimation = {
+
+		this.returnModelAnimation = {
+			easeFunc: easeOutQuart,   
 			isActive: false,
 			startQuaternion: null,
 			targetQuaternion: null,
 			startTime: 0,
-			duration: 1.0 // seconds for the return animation
-		};
+			duration: 1.5              // Seconds for the return animation
+		 };
 
 		this.interactionState = {
 			startX: 0,
@@ -107,6 +122,8 @@ class ThreeSceneManager {
 		};
 		
 		this.isInteractive = false;
+		this.lastInteractiveToggleTime = 0;
+		this.throttleInteractiveToggle = 250;
 
 		this.clock = new THREE.Clock();
 		this.hasAborted = false;
@@ -143,12 +160,6 @@ class ThreeSceneManager {
 		});
 
 		this.renderer.setPixelRatio(this.initialRenderPixelRatio);
-		// this.renderer.toneMapping = THREE.ReinhardToneMapping;
-		// this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-		// this.renderer.toneMapping = THREE.CineonToneMapping;
-		// this.renderer.toneMapping = THREE.NoToneMapping
-		// this.renderer.toneMapping = THREE.NeutralToneMapping;
-		// this.renderer.toneMapping = THREE.AgXToneMapping;
 		this.renderer.toneMappingExposure = 1.3;
 	}
 
@@ -160,6 +171,7 @@ class ThreeSceneManager {
 
 	setupControls() {
 		this.controls = new OrbitControls(this.camera, this.inputElement);
+		this.controls.enabled = false;
 		this.controls.enableDamping = true;
 		this.controls.dampingFactor = 0.055;
 		this.controls.target.set(0, 0, 0);
@@ -290,30 +302,37 @@ class ThreeSceneManager {
 	}
 
 	toggleInteractiveMode() {
+		const now = performance.now();
+		const cameraRotationDecay = this.controls.getMaxApproximateRotationDecayTimerMS() / 1000;
+		// Only toggle if 500ms have passed since the last toggle
+		if (now - this.lastInteractiveToggleTime < this.throttleInteractiveToggle) {
+		  return;
+		}
+		this.lastInteractiveToggleTime = now;
+		
 		this.isInteractive = !this.isInteractive;
 
 		if (this.isInteractive) {
-		  this.controls.connect();
-		  this.startReturnAnimation();
+		  this.controls.enabled = true;
+		  this.controls.stopCameraSmooth();
+		  this.controls._goalSpherical.radius = this.cameraSettings.targetDistance * 0.9;
+		  this.startReturnModelAnimation();
 		} else {
-		  this.controls.disconnect();
-		  this.returnAnimation.isActive = false;
-		  this.rotationParams.startTime = null; // Reset acceleration phase
-		  // Reset camera and controls to initial state
-		//   this.camera.position.copy(this.initialCameraPosition);
-		//   this.controls.target.copy(this.initialControlsTarget);
+		  this.controls.enabled = false;
+		  this.returnModelAnimation.isActive = false;
+		  this.rotationModelParams.startTime = this.clock.getElapsedTime() + Math.pow(Math.max(cameraRotationDecay - 0.35, 0), 0.5);
 			this.controls.returnToInit();
 		}
 	 }
 	 
-	 startReturnAnimation() {
+	 startReturnModelAnimation() {
 		if (!this.model || !this.initialModelRotation) return;
 		if (this.model.quaternion.equals(this.initialModelRotation)) return;
 	 
-		this.returnAnimation.isActive = true;
-		this.returnAnimation.startQuaternion = this.model.quaternion.clone();
-		this.returnAnimation.targetQuaternion = this.initialModelRotation.clone();
-		this.returnAnimation.startTime = this.clock.getElapsedTime();
+		this.returnModelAnimation.isActive = true;
+		this.returnModelAnimation.startQuaternion = this.model.quaternion.clone();
+		this.returnModelAnimation.targetQuaternion = this.initialModelRotation.clone();
+		this.returnModelAnimation.startTime = this.clock.getElapsedTime();
 	 }
 
 	abortLoading(error) {
@@ -401,13 +420,18 @@ class ThreeSceneManager {
 			loader.load(this.envmapUrl, (hdri) => {
 				const hdrTexture = hdri.renderTarget.texture;
 				this.configureHDRTexture(hdrTexture);
-				// this.scene.background = hdrTexture
 				// this.scene.backgroundBlurriness = 0.8;
-				// this.scene.backgroundIntensity = 0.4;
 				this.scene.environment = hdrTexture;
 				// this.scene.environmentRotation = new THREE.Euler(0.0, -2.37, 0.0);
 				// this.scene.environmentRotation = new THREE.Euler(-5.045, -2.37, 1.0);
-				this.scene.environment.mapping = THREE.EquirectangularReflectionMapping;
+				
+				// this.scene.background = hdrTexture
+
+				// this.scene.backgroundIntensity = 0.4;
+
+
+				// Create cube render target
+
 				hdri.dispose();
 				resolve();
 			},
@@ -419,6 +443,7 @@ class ThreeSceneManager {
 	}
 
 	configureHDRTexture(texture) {
+		texture.mapping = THREE.EquirectangularReflectionMapping;
 		texture.type = THREE.HalfFloatType;
 		texture.minFilter = THREE.LinearMipmapLinearFilter;
 		texture.magFilter = THREE.LinearFilter;
@@ -558,11 +583,11 @@ class ThreeSceneManager {
 		// Optionally: console.log(dt);
 		if (this.model) {
 			if (this.isInteractive) {
-			  if (this.returnAnimation.isActive) {
-				 this.updateReturnAnimation(dt);
+			  if (this.returnModelAnimation.isActive) {
+				 this.updateReturnModelAnimation();
 			  }
 			} else {
-			  this.autoRotateModel(dt);
+				this.autoRotateModel(dt);
 			}
 		 }
 		if (this.mixer) this.mixer.update(dt);
@@ -570,45 +595,31 @@ class ThreeSceneManager {
 		this.controls.update(dt);
 	}
 
-	updateReturnAnimation(dt) {
-		const elapsed = this.clock.getElapsedTime() - this.returnAnimation.startTime;
-		const t = Math.min(elapsed / this.returnAnimation.duration, 1);
-		const easedT = 1 - Math.pow(1 - t, 3); // Cubic ease-out
-	 
-		const quat = new THREE.Quaternion();
-		quat.copy(this.returnAnimation.startQuaternion).slerp(
-		  this.returnAnimation.targetQuaternion,
-		  easedT
+	updateReturnModelAnimation() {
+		const elapsed = this.clock.getElapsedTime() - this.returnModelAnimation.startTime;
+		const t = Math.min(elapsed, this.returnModelAnimation.duration);
+		const easedT = this.returnModelAnimation.easeFunc(t, 0, 1, this.returnModelAnimation.duration);
+		
+		// Directly copy and slerp in one step:
+		this.model.quaternion.copy(
+		  this.returnModelAnimation.startQuaternion.clone().slerp(this.returnModelAnimation.targetQuaternion, easedT)
 		);
-		this.model.quaternion.copy(quat);
-	 
-		if (t >= 1) {
-		  this.returnAnimation.isActive = false;
-		}
+
+		if (t >= this.returnModelAnimation.duration) this.returnModelAnimation.isActive = false;
 	 }
-
-autoRotateModel(dt) {
-		const now = this.clock.getElapsedTime();
-		
-		// Initialize start time on first frame
-		if (this.rotationParams.startTime === null) {
-			this.rotationParams.startTime = now;
+	 
+	 autoRotateModel(dt) {
+		if (!this.rotationModelParams.startTime) {
+		  this.rotationModelParams.startTime = this.clock.getElapsedTime();
 		}
 
-		// Calculate time since animation started
-		const elapsed = now - this.rotationParams.startTime;
+		if (this.clock.getElapsedTime() < this.rotationModelParams.startTime) return
+
+		const t = Math.min(this.clock.getElapsedTime() - this.rotationModelParams.startTime, this.rotationModelParams.duration);
+		this.rotationModelParams.currentSpeed = this.rotationModelParams.easeFunc(t, 0, 1, this.rotationModelParams.duration) * this.rotationModelParams.maxSpeed;
 		
-		// Calculate progress through acceleration phase
-		const t = Math.min(elapsed / this.rotationParams.duration, 1);
-		
-		// Get eased progress
-		const progress = this.rotationParams.easeFunc(t);
-		
-		// Calculate current rotation speed
-		this.rotationParams.currentSpeed = progress * this.rotationParams.maxSpeed;
-		
-		this.model.rotateY(-this.rotationParams.currentSpeed * dt);
-	}
+		this.model.rotateY(-this.rotationModelParams.currentSpeed * dt);
+	 }
 
 	getCanvasRelativePosition(event) {
 		const rect = this.inputElement.getBoundingClientRect();

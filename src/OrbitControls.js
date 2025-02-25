@@ -144,15 +144,47 @@ class OrbitControls extends Controls {
 		this._initialSpherical = new Spherical();
 		this._sphericalDelta = new Spherical();
 
-		this.decayTimeDamper = {
-			radiusScroll: 70, // ms
-			radiusPinch: 20,
-			rotation: 58
+
+		// note: these times are TIME CONSTANTS in MILLISECONDS.
+		// They don't actually represent the final timing.
+		this.interactiveDecayTimeDampers = {
+			radius: 70, // zoom using scrol wheel, touchpad
+			radiusPinch: 20,	// 2-finger pinch to zoom mobile
+			rotation: 58,
+			pan: 58 // Add pan decay time
 		}
 
-		this.radiusDamper = new Damper(this.decayTimeDamper.radiusScroll);
-		this.thetaDamper = new Damper(this.decayTimeDamper.rotation);
-		this.phiDamper = new Damper(this.decayTimeDamper.rotation);
+		// click the object, return camera to init
+		this.returnPosDecayTimeDampers = { 
+			max: {
+				radius: 200, 
+				rotation: 200
+			},
+			min: {
+				radius: 50, 
+				rotation: 50,
+			}
+		}
+
+		// Adjust this factor to get the desired “braking” feel
+		// smaller number = less distance
+		this.stopCameraLerpFactor = 0.3; 
+
+		// this is to avoid decayTimeDamper reset when the
+		// camera is still animating back to the returning position
+		// and the user activated again the interactivity
+		this.firstMove = true;
+		this.isMoving = false;
+
+		this.radiusDamper = new Damper(this.interactiveDecayTimeDampers.radius);
+		this.thetaDamper = new Damper(this.interactiveDecayTimeDampers.rotation);
+		this.phiDamper = new Damper(this.interactiveDecayTimeDampers.rotation);
+
+		this.panXDamper = new Damper(this.interactiveDecayTimeDampers.pan);
+		this.panYDamper = new Damper(this.interactiveDecayTimeDampers.pan);
+		this.panZDamper = new Damper(this.interactiveDecayTimeDampers.pan);
+
+		this._goalPanOffset = new Vector3(); // Track target pan offset
 
 		this._scale = 1;
 		this._panOffset = new Vector3();
@@ -200,16 +232,14 @@ class OrbitControls extends Controls {
 
 		// https://github.com/google/model-viewer/blob/master/packages/model-viewer/src/three-components/SmoothControls.ts
 		this.damperNormalization = {
-			sphericalRadius: this.maximumRadius,
+			sphericalRadius: 1,
 			sphericalTheta: Math.PI,
 			sphericalPhi: this.maxPolarAngle,
 			fov: 1
 		}
 
 		// set initial spherical and goalSpherical to be identical
-		_v.copy(this.object.position).sub(this.target);
-		_v.applyQuaternion(this._quat);
-		this._spherical.setFromVector3(_v);
+		this._wrapSpherical(this._spherical);
 		this._goalSpherical.copy(this._spherical);
 		this._initialSpherical.copy(this._spherical);
 
@@ -301,6 +331,26 @@ class OrbitControls extends Controls {
 
 	}
 
+	// unused for now
+	firstMoveDecay() {
+		if (!this.firstMove) return
+		this.setDamperDecayTimers(this.interactiveDecayTimeDampers);
+		this._goalSpherical.copy(this._spherical);
+		this.firstMove = false;
+	}
+
+	stopCameraSmooth() {	 
+		this.setDamperDecayTimers(this.interactiveDecayTimeDampers);
+
+		// Example: if _spherical.theta is -1.0 and _goalSpherical.theta is -0.4,
+		// then the new goal becomes: -1.0 + 0.33 * (0.6) ≈ -0.8.
+		this._goalSpherical.theta = this._spherical.theta + (this._goalSpherical.theta - this._spherical.theta) * this.stopCameraLerpFactor;
+	 
+		this._goalSpherical.phi = this._spherical.phi + (this._goalSpherical.phi - this._spherical.phi) * this.stopCameraLerpFactor;
+	 
+		this._goalSpherical.radius = this._spherical.radius + (this._goalSpherical.radius - this._spherical.radius) * this.stopCameraLerpFactor;
+	 }
+
 	saveState() {
 
 		this.target0.copy( this.target );
@@ -324,16 +374,77 @@ class OrbitControls extends Controls {
 
 	}
 
-	returnToInit() {
-		console.log(this._goalSpherical);
-		this._goalSpherical.copy(this._initialSpherical);
-		console.log(this._goalSpherical);
-
+	setDamperDecayTimers(decayTimeDampers) {
+		this.radiusDamper.setDecayConstant(decayTimeDampers.radius);
+		this.thetaDamper.setDecayConstant(decayTimeDampers.rotation);
+		this.phiDamper.setDecayConstant(decayTimeDampers.rotation);
+		this.panXDamper.setDecayConstant(decayTimeDampers.pan);
+		this.panYDamper.setDecayConstant(decayTimeDampers.pan);
+		this.panZDamper.setDecayConstant(decayTimeDampers.pan);
 	}
-	
+
+	_wrapSpherical(spherical) {
+		_v.copy(this.object.position).sub(this.target);
+		_v.applyQuaternion(this._quat);
+		spherical.setFromVector3(_v);
+	}
+
+	returnToInit() {
+		// Update the current spherical coordinates from the current camera position.
+		this._wrapSpherical(this._spherical);
+		this.isMoving = true;
+	 
+		// Compute differences from the initial spherical values.
+		const deltaRadius = Math.abs(this._spherical.radius - this._initialSpherical.radius);
+		const deltaTheta = Math.abs(this._spherical.theta - this._initialSpherical.theta);
+		const deltaPhi = Math.abs(this._spherical.phi - this._initialSpherical.phi);
+	 
+		// Use the maximum of the angular differences for rotation.
+		const deltaRotation = Math.max(deltaTheta, deltaPhi);
+	 
+		// Define time-constant maximum decay times (from your current settings) in milliseconds.
+		const maxRadiusDecay = this.returnPosDecayTimeDampers.max.radius;
+		const maxRotationDecay = this.returnPosDecayTimeDampers.max.rotation;
+	 
+		// Define time-constant minimum decay times (when the camera is nearly at the initial state).
+		const minRadiusDecay = this.returnPosDecayTimeDampers.min.radius;
+		const minRotationDecay = this.returnPosDecayTimeDampers.min.rotation;
+	 
+		// Normalize differences.
+		// For radius, use the initial radius as a baseline (avoid division by zero).
+		const normRadius = this._initialSpherical.radius || 1;
+		const radiusDiffRatio = Math.min(1, deltaRadius / normRadius);
+	 
+		// For rotation, assume that PI radians is the maximum meaningful difference.
+		const normRotation = Math.PI;
+		const rotationDiffRatio = Math.min(1, deltaRotation / normRotation);
+	 
+		// Compute the new damper decay times by interpolating between the minimum and maximum.
+		const newRadiusDecay = minRadiusDecay + (maxRadiusDecay - minRadiusDecay) * radiusDiffRatio;
+		const newRotationDecay = minRotationDecay + (maxRotationDecay - minRotationDecay) * rotationDiffRatio;
+	 
+		// Set the damper decay times using the newly computed values.
+		this.setDamperDecayTimers({
+		  radius: newRadiusDecay,
+		  rotation: newRotationDecay
+		});
+
+		// Now set the goal spherical to the initial spherical state.
+		this._goalSpherical.copy(this._initialSpherical);
+	 
+		// Optionally reset the firstMove flag if your logic requires it.
+		this.firstMove = true;
+	 }
+
+	getMaxApproximateRotationDecayTimerMS() {
+		return Math.max(
+			this.phiDamper.getApproximateDecayTime(),
+			this.thetaDamper.getApproximateDecayTime(),
+		)
+	}
 
 	update( deltaTime = 0 ) {
-		// console.log(this._spherical.theta, this._goalSpherical.theta)
+		// console.log(this._goalSpherical, this._spherical)
 
 		// deltaTime is in seconds
 		const deltaTimeMS = deltaTime * 1000
@@ -348,6 +459,7 @@ class OrbitControls extends Controls {
 		// angle from z-axis around y-axis
 		// this converts theta angles
 		// this._spherical.setFromVector3( _v );
+		
 
 		if ( this.autoRotate && this.state === _STATE.NONE ) {
 
@@ -518,16 +630,6 @@ class OrbitControls extends Controls {
 
 				}
 
-				if (this._goalSpherical.theta === this._spherical.theta &&
-					this._goalSpherical.phi === this._spherical.phi &&
-					this._goalSpherical.radius === this._spherical.radius) {
-					_v.copy(this.object.position).sub(this.target);
-					_v.applyQuaternion(this._quat);
-					this._spherical.setFromVector3(_v);
-					this._goalSpherical.copy(this._spherical);
-				}
-				
-
 			}
 
 		} else if ( this.object.isOrthographicCamera ) {
@@ -543,6 +645,17 @@ class OrbitControls extends Controls {
 			}
 
 		}
+
+		if (this._goalSpherical.theta === this._spherical.theta &&
+			this._goalSpherical.phi === this._spherical.phi &&
+			this._goalSpherical.radius === this._spherical.radius) {
+			this.isMoving = false;
+			this._wrapSpherical(this._spherical);
+			this._goalSpherical.copy(this._spherical);
+		} else {
+			this.isMoving = true;
+		}
+		
 
 		this._scale = 1;
 		this._performCursorZoom = false;
@@ -630,10 +743,12 @@ class OrbitControls extends Controls {
 	}
 
 	_rotateLeft(angle) {
+		// this.firstMoveDecay();
 		this._goalSpherical.theta = this._clampAzimuthAngle(this._goalSpherical.theta - angle);
   }
 
 	_rotateUp(angle) {
+		// this.firstMoveDecay();
 		this._goalSpherical.phi = this._clampPolarAngle(this._goalSpherical.phi - angle);
 	}
 
@@ -672,6 +787,8 @@ class OrbitControls extends Controls {
 
 		if ( this.object.isPerspectiveCamera ) {
 
+			// this.firstMoveDecay();
+
 			// perspective
 			const position = this.object.position;
 			_v.copy( position ).sub( this.target );
@@ -704,11 +821,17 @@ class OrbitControls extends Controls {
 
 		if ( this.object.isPerspectiveCamera || this.object.isOrthographicCamera ) {
 
+			// this.firstMoveDecay();
+
 			// this._scale /= dollyScale;
 			// damping ? this._zoomDelta += do llyScale : this._scale /= dollyScale;
-			pinching 
-				? this._goalSpherical.radius = this._clampDistance(this._goalSpherical.radius / dollyScale)
-				: this._goalSpherical.radius = this._clampDistance(this._goalSpherical.radius + dollyScale)
+			if (pinching) {
+				this.radiusDamper.setDecayConstant(this.interactiveDecayTimeDampers.radiusPinch);
+				this._goalSpherical.radius = this._clampDistance(this._goalSpherical.radius / dollyScale)
+			} else {
+				this.radiusDamper.setDecayConstant(this.interactiveDecayTimeDampers.radius);
+				this._goalSpherical.radius = this._clampDistance(this._goalSpherical.radius + dollyScale)
+			}
 			
 			if (!damping) this._spherical.radius = this._goalSpherical.radius;
 
@@ -725,9 +848,15 @@ class OrbitControls extends Controls {
 
 		if ( this.object.isPerspectiveCamera || this.object.isOrthographicCamera ) {
 
-			pinching 
-				? this._goalSpherical.radius = this._clampDistance(this._goalSpherical.radius * dollyScale)
-				: this._goalSpherical.radius = this._clampDistance(this._goalSpherical.radius - dollyScale)
+			// this.firstMoveDecay();
+
+			if (pinching) {
+				this.radiusDamper.setDecayConstant(this.interactiveDecayTimeDampers.radiusPinch);
+				this._goalSpherical.radius = this._clampDistance(this._goalSpherical.radius * dollyScale)
+			} else {
+				this.radiusDamper.setDecayConstant(this.interactiveDecayTimeDampers.radius);
+				this._goalSpherical.radius = this._clampDistance(this._goalSpherical.radius - dollyScale)
+			}
 			
 			if (!damping) this._spherical.radius = this._goalSpherical.radius;
 
@@ -793,7 +922,7 @@ class OrbitControls extends Controls {
 	}
 
 	_handleMouseMoveRotate( event ) {
-
+		
 		this._rotateEnd.set( event.clientX, event.clientY );
 
 		this._rotateDelta.subVectors( this._rotateEnd, this._rotateStart ).multiplyScalar( this.rotateSpeed );
@@ -815,8 +944,6 @@ class OrbitControls extends Controls {
 
 		this._dollyDelta.subVectors( this._dollyEnd, this._dollyStart );
 
-		this.radiusDamper.setDecayTime(this.decayTimeDamper.radiusScroll);
-
 		if ( this._dollyDelta.y > 0 ) {
 
 			this._dollyOut( this._getZoomScale( this._dollyDelta.y ), true );
@@ -833,6 +960,7 @@ class OrbitControls extends Controls {
 	}
 
 	_handleMouseMovePan( event ) {
+
 
 		this._panEnd.set( event.clientX, event.clientY );
 
@@ -867,6 +995,8 @@ class OrbitControls extends Controls {
 	}
 
 	_handleKeyDown( event ) {
+
+		if ( this.enabled === false ) return;
 
 		let needsUpdate = false;
 
@@ -1111,7 +1241,6 @@ class OrbitControls extends Controls {
 		this._dollyEnd.set( 0, distance );
 		this._dollyDelta.set( 0, Math.pow( this._dollyEnd.y / this._dollyStart.y, this.pinchToZoomSpeed ) );
 
-		this.radiusDamper.setDecayTime(this.decayTimeDamper.radiusPinch);
 		this._dollyOut( this._dollyDelta.y, false, true );
 
 		this._dollyStart.copy( this._dollyEnd );
@@ -1228,6 +1357,7 @@ class OrbitControls extends Controls {
 }
 
 function onPointerDown( event ) {
+
 
 	if ( this.enabled === false ) return;
 
