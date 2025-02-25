@@ -56,6 +56,7 @@ class OrbitControls extends Controls {
 
 		// "target" sets the location of focus, where the object orbits around
 		this.target = new Vector3();
+		this._goalTarget = this.target.clone();
 
 		// Sets the 3D cursor (similar to Blender), from which the maxTargetRadius takes effect
 		this.cursor = new Vector3();
@@ -148,10 +149,10 @@ class OrbitControls extends Controls {
 		// note: these times are TIME CONSTANTS in MILLISECONDS.
 		// They don't actually represent the final timing.
 		this.interactiveDecayTimeDampers = {
-			radius: 70, // zoom using scrol wheel, touchpad
+			radius: 70, 		// zoom using scrol wheel, touchpad
 			radiusPinch: 20,	// 2-finger pinch to zoom mobile
 			rotation: 58,
-			pan: 58 // Add pan decay time
+			pan: 70,
 		}
 
 		// click the object, return camera to init
@@ -179,15 +180,12 @@ class OrbitControls extends Controls {
 		this.radiusDamper = new Damper(this.interactiveDecayTimeDampers.radius);
 		this.thetaDamper = new Damper(this.interactiveDecayTimeDampers.rotation);
 		this.phiDamper = new Damper(this.interactiveDecayTimeDampers.rotation);
-
-		this.panXDamper = new Damper(this.interactiveDecayTimeDampers.pan);
-		this.panYDamper = new Damper(this.interactiveDecayTimeDampers.pan);
-		this.panZDamper = new Damper(this.interactiveDecayTimeDampers.pan);
-
-		this._goalPanOffset = new Vector3(); // Track target pan offset
+		
+		this.targetXDamper = new Damper(this.interactiveDecayTimeDampers.pan);
+		this.targetYDamper = new Damper(this.interactiveDecayTimeDampers.pan);
+		this.targetZDamper = new Damper(this.interactiveDecayTimeDampers.pan);
 
 		this._scale = 1;
-		this._panOffset = new Vector3();
 
 		this._rotateStart = new Vector2();
 		this._rotateEnd = new Vector2();
@@ -362,25 +360,21 @@ class OrbitControls extends Controls {
 	reset() {
 
 		this.target.copy( this.target0 );
+		this._goalTarget.copy( this.target0 );
 		this.object.position.copy( this.position0 );
 		this.object.zoom = this.zoom0;
-
+  
 		this.object.updateProjectionMatrix();
 		this.dispatchEvent( _changeEvent );
-
-		// this.update();
-
+  
 		this.state = _STATE.NONE;
 
-	}
+  }
 
 	setDamperDecayTimers(decayTimeDampers) {
 		this.radiusDamper.setDecayConstant(decayTimeDampers.radius);
 		this.thetaDamper.setDecayConstant(decayTimeDampers.rotation);
 		this.phiDamper.setDecayConstant(decayTimeDampers.rotation);
-		this.panXDamper.setDecayConstant(decayTimeDampers.pan);
-		this.panYDamper.setDecayConstant(decayTimeDampers.pan);
-		this.panZDamper.setDecayConstant(decayTimeDampers.pan);
 	}
 
 	_wrapSpherical(spherical) {
@@ -423,6 +417,8 @@ class OrbitControls extends Controls {
 		const newRadiusDecay = minRadiusDecay + (maxRadiusDecay - minRadiusDecay) * radiusDiffRatio;
 		const newRotationDecay = minRotationDecay + (maxRotationDecay - minRotationDecay) * rotationDiffRatio;
 	 
+		this._goalTarget.copy( this.target0 );
+
 		// Set the damper decay times using the newly computed values.
 		this.setDamperDecayTimers({
 		  radius: newRadiusDecay,
@@ -468,6 +464,7 @@ class OrbitControls extends Controls {
 		}
 
 		if ( this.enableDamping ) {
+
 			this._spherical.theta = this.thetaDamper.update(
 				this._spherical.theta, this._goalSpherical.theta, deltaTimeMS, this.damperNormalization.sphericalTheta)
 
@@ -475,8 +472,10 @@ class OrbitControls extends Controls {
 				this._spherical.phi, this._goalSpherical.phi, deltaTimeMS, this.damperNormalization.sphericalPhi)
    
          if ( this.object.isPerspectiveCamera || this.object.isOrthographicCamera ) {
+
 				this._spherical.radius = this.radiusDamper.update(
 					this._spherical.radius, this._goalSpherical.radius, deltaTimeMS, this.damperNormalization.sphericalRadius)
+					
          }
 
 		} else {
@@ -498,16 +497,18 @@ class OrbitControls extends Controls {
 
 
 		// move target to panned location
+		if ( this.enableDamping ) {
 
-		if ( this.enableDamping === true ) {
+			const norm = 1;
+			this.target.x = this.targetXDamper.update(this.target.x, this._goalTarget.x, deltaTimeMS, norm);
+			this.target.y = this.targetYDamper.update(this.target.y, this._goalTarget.y, deltaTimeMS, norm);
+			this.target.z = this.targetZDamper.update(this.target.z, this._goalTarget.z, deltaTimeMS, norm);
 
-			this.target.addScaledVector( this._panOffset, this.dampingFactor );
+	  } else {
 
-		} else {
-
-			this.target.add( this._panOffset );
-
-		}
+			this.target.copy(this._goalTarget);
+			
+	  }
 
 		// Limit the target distance from the cursor to create a sphere around the center of interest
 		this.target.sub( this.cursor );
@@ -537,22 +538,6 @@ class OrbitControls extends Controls {
 		position.copy( this.target ).add( _v );
 
 		this.object.lookAt( this.target );
-
-		if ( this.enableDamping === true ) {
-
-			// this._sphericalDelta.theta *= ( 1 - this.dampingFactor );
-			// this._sphericalDelta.phi *= ( 1 - this.dampingFactor );
-         // this._zoomDelta *= ( 1 - this.zoomDampingFactor * deltaTime );
-
-			this._panOffset.multiplyScalar( 1 - this.dampingFactor );
-
-		} else {
-
-			this._sphericalDelta.set( 0, 0, 0 );
-
-			this._panOffset.set( 0, 0, 0 );
-
-		}
 
 		// adjust camera position
 		if ( this.zoomToCursor && this._performCursorZoom ) {
@@ -648,14 +633,14 @@ class OrbitControls extends Controls {
 
 		if (this._goalSpherical.theta === this._spherical.theta &&
 			this._goalSpherical.phi === this._spherical.phi &&
-			this._goalSpherical.radius === this._spherical.radius) {
+			this._goalSpherical.radius === this._spherical.radius &&
+			this.target.equals(this._goalTarget)) {
 			this.isMoving = false;
 			this._wrapSpherical(this._spherical);
 			this._goalSpherical.copy(this._spherical);
 		} else {
 			this.isMoving = true;
 		}
-		
 
 		this._scale = 1;
 		this._performCursorZoom = false;
@@ -755,11 +740,10 @@ class OrbitControls extends Controls {
 	_panLeft( distance, objectMatrix ) {
 
 		_v.setFromMatrixColumn( objectMatrix, 0 ); // get X column of objectMatrix
-		_v.multiplyScalar( - distance );
-
-		this._panOffset.add( _v );
-
-	}
+		_v.multiplyScalar( -distance );
+		this._goalTarget.add( _v );
+		
+  }
 
 	_panUp( distance, objectMatrix ) {
 
@@ -776,7 +760,7 @@ class OrbitControls extends Controls {
 
 		_v.multiplyScalar( distance );
 
-		this._panOffset.add( _v );
+		this._goalTarget.add( _v );
 
 	}
 
