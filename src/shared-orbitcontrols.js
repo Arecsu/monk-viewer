@@ -117,6 +117,7 @@ class ThreeSceneManager {
 			startY: 0,
 			startTime: 0,
 			isDragging: false,
+			isTouchOrLeftClick: false,
 			dragThreshold: 5, // pixels of movement to consider a drag
 			clickTimeThreshold: 300 // max milliseconds for a click
 		};
@@ -254,15 +255,29 @@ class ThreeSceneManager {
 		// Prevent default for touch events to avoid scrolling
 		if (event.type === "touchstart") event.preventDefault();
 		
-		// Get position
-		const pos = event.type.startsWith("touch") 
-			? { x: event.touches[0].clientX, y: event.touches[0].clientY }
-			: { x: event.clientX, y: event.clientY };
+		let pos;
+		let isTouchOrLeftClick = false;
+
+		// Get position and type of click
+		if (event.type.startsWith("touch")) {
+			pos = {
+				x: event.touches[0].clientX,
+				y: event.touches[0].clientY,
+			}
+			isTouchOrLeftClick = true;
+		} else {
+			pos = {
+				x: event.clientX,
+				y: event.clientY
+			}
+			if (event.button === 0) isTouchOrLeftClick = true;
+		}
 			
 		// Store starting position and time
 		this.interactionState.startX = pos.x;
 		this.interactionState.startY = pos.y;
 		this.interactionState.startTime = performance.now();
+		this.interactionState.isTouchOrLeftClick = isTouchOrLeftClick;
 		this.interactionState.isDragging = false;
 		
 	}
@@ -287,12 +302,16 @@ class ThreeSceneManager {
 		}
 	}
 
-	handleInputEnd(event) {
+	handleInputEnd() {
 		// Calculate how long the interaction lasted
 		const duration = performance.now() - this.interactionState.startTime;
 		
-		// If it was short and not a drag, it's a click
-		if (duration < this.interactionState.clickTimeThreshold && !this.interactionState.isDragging) {
+		// If it was a short click/touch + not a drag + touch or left click, trigger
+		if (
+			duration < this.interactionState.clickTimeThreshold && 
+			!this.interactionState.isDragging && 
+			this.interactionState.isTouchOrLeftClick
+		) {
 			this.toggleInteractiveMode();
 		}
 		
