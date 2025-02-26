@@ -61,8 +61,8 @@ class ThreeSceneManager {
 		this.inputElement = data.inputElement;
 		this.modelUrl = data.modelUrl;
 		// this.modelUrl = artworkModelUrl;
-		// this.envmapUrl = data.envmapUrl;
-		this.envmapUrl = HDRIMAP;
+		this.envmapUrl = data.envmapUrl;
+		// this.envmapUrl = HDRIMAP;
 		this.lowPerformanceSettings = {
 			 disableAA: data.lowPerformanceSettings?.disableAA ?? false,
 			 lowResolution: data.lowPerformanceSettings?.lowResolution ?? false
@@ -70,7 +70,8 @@ class ThreeSceneManager {
 		this.baseLoadPixelRatio = data.pixelRatio ?? window.devicePixelRatio;
 		this.initialRenderPixelRatio = this.lowPerformanceSettings.lowResolution ? data.pixelRatio / 2 : this.baseLoadPixelRatio;
 		this.performantRenderPixelRatio = null;
-		this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 4;
+		// this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 4;
+		this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 0;
 
 		this.pixelRatioVariation = 1; // this to handle screen DPI changes
          
@@ -145,17 +146,18 @@ class ThreeSceneManager {
 		this.setupControls();
 		this.setupScene();
 		// this.setupLighting();
-	 
+		
 		Promise.all([
-		  this.setupPostProcessing(),
-		  this.loadAssets()
+			this.setupPostProcessing(),
+			this.loadAssets()
 		])
-		  .then(() => {
-			 this.startPerformanceSamplingLoop();
-		  })
-		  .catch((error) => {
-			 this.abortLoading(error);
-		  });
+			.then(() => {
+				// this.startPerformanceSamplingLoop();
+				this.startRenderLoop();
+			})
+			.catch((error) => {
+				this.abortLoading(error);
+			});
 	 }
 
 	setupRenderer() {
@@ -208,6 +210,7 @@ class ThreeSceneManager {
 		  this.pipeline.add(
 			 new GeometryPass(this.scene, this.camera, {
 				frameBufferType: THREE.HalfFloatType,
+				// frameBufferType: THREE.UnsignedByteType,
 				samples: this.msaaSamples,
 			 })
 		  );
@@ -222,7 +225,7 @@ class ThreeSceneManager {
 			 new ToneMappingEffect({
 				toneMapping: ToneMapping.REINHARD,
 			 }),
-			 new DitheringEffect()
+			//  new DitheringEffect()
 		  );
 		  this.pipeline.add(effects);
 	 
@@ -517,6 +520,7 @@ class ThreeSceneManager {
 			 this.handleResize();
 			 this.updateScene();
 			 this.pipeline.render();
+			 // this.renderer.render(this.scene, this.camera);
   
 			 // Warm-up phase
 			 if (!isMeasuring && (this.clock.getElapsedTime()) < stabilizationTime) {
@@ -552,10 +556,13 @@ class ThreeSceneManager {
   }
 
 	startRenderLoop() {
+		this.clock.start();
+		this.setupInteraction();
 		const render = () => {
 			this.handleResize();
 			this.updateScene();
 			this.pipeline.render();
+			// this.renderer.render(this.scene, this.camera);
 			requestAnimationFrame(render);
 		}
 		requestAnimationFrame(render);
