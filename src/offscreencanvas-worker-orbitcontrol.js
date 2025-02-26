@@ -93,6 +93,7 @@ function start(data) {
 		targetDistance: data.targetDistance,
 		maxDistance: data.maxDistance,
 		lowPerformanceSettings: data.lowPerformanceSettings,
+		perfSampling: data.perfSampling,
 		onInteractivityChange: (state) => proxy.setInteractivity(state)
 	})
 }

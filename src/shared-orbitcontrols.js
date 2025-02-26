@@ -78,11 +78,16 @@ class ThreeSceneManager {
 		this.camera = null;
 
 		this.cameraSettings = {
-			targetDistance: data.targetDistance,
-			maxDistance: data.targetDistance / 0.9,
-			minDistance: data.minDistance
+			targetDistance: data.targetDistance || 1.0,
+			maxDistance: data.targetDistance / 0.9 || Infinity,
+			minDistance: data.minDistance || 0,
 		}
 
+		this.perfSampling = {
+			stabilizationDuration: data.perfSampling.stabilityDuration || 1.0,	// Warm-up period in seconds
+			measureDuration: data.perfSampling.measureDuration || 0.5 // Active measurement window in seconds
+		}
+		
 		this.renderer = null;
 		this.pipeline = null;
 		this.controls = null;
@@ -474,8 +479,8 @@ class ThreeSceneManager {
 	}
 
 	startPerformanceSamplingLoop() {
-		const stabilizationTime = 1.0; // Warm-up period in seconds
-		const measureDuration = 0.5;   // Active measurement window in seconds
+		const stabilizationTime = this.perfSampling.stabilizationDuration;
+		const measureDuration = this.perfSampling.measureDuration;
 		
 		let frameCount = 0;
 		let isMeasuring = false;
@@ -642,42 +647,6 @@ class ThreeSceneManager {
 		
 		this.model.rotateY(-this.rotationModelParams.currentSpeed * dt);
 	 }
-}
-
-// Utility class for object picking
-class PickHelper {
-	constructor() {
-		this.raycaster = new THREE.Raycaster();
-		this.pickedObject = null;
-		this.pickedObjectSavedColor = 0;
-	}
-
-	pick(normalizedPosition, scene, camera, time) {
-		// Restore previous picked object color
-		if (this.pickedObject) {
-			this.pickedObject.material.emissive.setHex(
-				this.pickedObjectSavedColor,
-			);
-			this.pickedObject = undefined;
-		}
-
-		// Raycast and find intersected objects
-		this.raycaster.setFromCamera(normalizedPosition, camera);
-		const intersectedObjects = this.raycaster.intersectObjects(
-			scene.children,
-		);
-
-		if (intersectedObjects.length) {
-			this.pickedObject = intersectedObjects[0].object;
-			this.pickedObjectSavedColor = this.pickedObject.material.emissive
-				.getHex();
-
-			// Flashing effect for picked object
-			this.pickedObject.material.emissive.setHex(
-				(time * 8) % 2 > 1 ? 0xFFFF00 : 0xFF0000,
-			);
-		}
-	}
 }
 
 // Initialization function

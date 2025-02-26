@@ -174,6 +174,10 @@ class MonkView extends HTMLElement {
     targetDistance: number;
     maxDistance: number;
     lowPerformanceSettings: ReturnType<typeof getLowPerformanceSettings>;
+    perfSampling: {
+      stabilityDuration: number;
+      measureDuration: number;
+    }
   };
   public isInteractive: boolean = false;
 
@@ -187,15 +191,20 @@ class MonkView extends HTMLElement {
     const targetDistance = parseFloat(this.getAttribute("target-distance") || "0.8");
     const minDistance = parseFloat(this.getAttribute("min-distance") || "0.1");
     const maxDistance = parseFloat(this.getAttribute("max-distance") || "1.0");
+    const perfSampling = {
+      stabilityDuration: parseFloat(this.getAttribute("perf-stability-duration") || "1.0"),
+      measureDuration: parseFloat(this.getAttribute("perf-measure-duration") || "0.5")
+    }
 
     this.commonOptions = {
       pixelRatio: window.devicePixelRatio || 1,
       modelUrl,
       envmapUrl,
-        minDistance,
-        targetDistance,
-        maxDistance,
+      minDistance,
+      targetDistance,
+      maxDistance,
       lowPerformanceSettings: getLowPerformanceSettings(),
+      perfSampling
     };
   }
 
