@@ -13,7 +13,8 @@
 
 <body>
   <div id="my-keen-slider" class="keen-slider">
-    <div class="keen-slider__slide number-slide1">
+    <div class="keen-slider__slide number-slide1">1</div>
+    <div class="keen-slider__slide number-slide2">
       <span>[LOADING]</span>
       <monk-view 
         id="c"
@@ -24,15 +25,33 @@
         envmap="https://raw.githubusercontent.com/Arecsu/model-viewer/monk/packages/shared-assets/environments/old_bus_depot_2k_HDR.jpg">
       </monk-view>
     </div>
-    <div class="keen-slider__slide number-slide2">2</div>
     <div class="keen-slider__slide number-slide3">3</div>
     <div class="keen-slider__slide number-slide4">4</div>
     <div class="keen-slider__slide number-slide5">5</div>
     <div class="keen-slider__slide number-slide6">6</div>
   </div>
+  <div class="bottom">
+    hello!
+  </div>
   <script src="https://cdn.jsdelivr.net/npm/keen-slider@6.8.5/keen-slider.min.js"></script>
   <script>
-    // var slider = new KeenSlider("#my-keen-slider")
+    const slider = new KeenSlider("#my-keen-slider", {
+      loop: true,
+    });
+    const monkView = document.getElementById('c');
+
+    const disableDragSlider = (slider) => 
+      slider.update(Object.assign({}, slider.options, { drag: false }))
+
+    const enableDragSlider = (slider) =>
+      slider.update(Object.assign({}, slider.options, { drag: true }))
+
+    monkView.addEventListener('interactivity', (e) => {
+      const isInteractive = e.detail.state;
+      isInteractive ? disableDragSlider(slider) : enableDragSlider(slider)
+    });
+
+
   </script>
   <script type="module" src="/src/main.ts"></script>
 </body>

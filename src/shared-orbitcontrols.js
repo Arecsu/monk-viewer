@@ -118,13 +118,15 @@ class ThreeSceneManager {
 			startTime: 0,
 			isDragging: false,
 			isTouchOrLeftClick: false,
-			dragThreshold: 5, // pixels of movement to consider a drag
+			dragThreshold: 3, // pixels of movement to consider a drag, lower to avoid keen-slider trigger
 			clickTimeThreshold: 300 // max milliseconds for a click
 		};
 		
 		this.isInteractive = false;
 		this.lastInteractiveToggleTime = 0;
 		this.throttleInteractiveToggle = 250;
+		this.onInteractivityChange = data.onInteractivityChange || (() => {});
+		this.onInteractivityChange(this.isInteractive);
 
 		this.clock = new THREE.Clock();
 		this.hasAborted = false;
@@ -330,6 +332,7 @@ class ThreeSceneManager {
 		this.lastInteractiveToggleTime = now;
 		
 		this.isInteractive = !this.isInteractive;
+		this.onInteractivityChange(this.isInteractive);
 
 		if (this.isInteractive) {
 		  this.controls.enabled = true;
@@ -639,25 +642,6 @@ class ThreeSceneManager {
 		
 		this.model.rotateY(-this.rotationModelParams.currentSpeed * dt);
 	 }
-
-	getCanvasRelativePosition(event) {
-		const rect = this.inputElement.getBoundingClientRect();
-		return {
-			x: event.clientX - rect.left,
-			y: event.clientY - rect.top,
-		};
-	}
-
-	setPickPosition(event) {
-		const pos = this.getCanvasRelativePosition(event);
-		this.pickPosition.x = (pos.x / this.inputElement.clientWidth) * 2 - 1;
-		this.pickPosition.y = (pos.y / this.inputElement.clientHeight) * -2 + 1;
-	}
-
-	clearPickPosition() {
-		this.pickPosition.x = -100000;
-		this.pickPosition.y = -100000;
-	}
 }
 
 // Utility class for object picking

@@ -17,7 +17,7 @@ body {
   margin: 0;
   font-family: "Inter", sans-serif;
   display: grid;
-  height: 100dvh;
+  min-height: 100dvh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -25,10 +25,15 @@ body {
 .keen-slider {
   flex-wrap: nowrap;
   justify-content: start;
+  height: 100dvh;
 }
 
 .keen-slider .keen-slider__slide {
   flex: 0 0 auto;
+}
+
+.bottom {
+  height: 100vh;
 }
 
 [class^="number-slide"],
@@ -48,7 +53,7 @@ body {
   /* justify-content: end; */
 }
 
-.number-slide1 {
+.number-slide2 {
   display: grid;
   background: black;
   place-items: center;
@@ -59,12 +64,12 @@ body {
 }
 
 
-.number-slide1 * {
+.number-slide2 * {
   grid-area: 1 / 1 / -1 / -1;
 }
 
 
-.number-slide2 {
+.number-slide1 {
   background: rgb(255, 75, 64);
   background: linear-gradient(
     128deg,

@@ -8,13 +8,12 @@ interface EventPayload {
 
 class ElementProxy {
   private static nextId = 0;
-  public readonly id: number;
+  public readonly id: number = ElementProxy.nextId++;
   private worker: Worker;
   private element: HTMLElement;
   private resizeObserver: ResizeObserver;
 
   constructor(element: HTMLElement, worker: Worker, handlers: Record<string, (event: Event) => EventPayload>) {
-    this.id = ElementProxy.nextId++;
     this.worker = worker;
     this.element = element;
   
@@ -91,7 +90,7 @@ function makeTouchEventHandler() {
   };
 }
 
-const createEventHandlers = () => {
+const createEventHandlers = (monkView: MonkView) => {
   
   const mouseEventHandler = makeSendPropertiesHandler([
     "ctrlKey",
@@ -114,6 +113,7 @@ const createEventHandlers = () => {
       e.preventDefault()
       return { type: e.type }
     }),
+    
     click:        createHandler<MouseEvent>(mouseEventHandler),
     mousedown:    createHandler<MouseEvent>(mouseEventHandler),
     mousemove:    createHandler<MouseEvent>(mouseEventHandler),
@@ -125,7 +125,9 @@ const createEventHandlers = () => {
     pointerout:   createHandler<MouseEvent>(mouseEventHandler),
 
     wheel: createHandler<WheelEvent>((e) => {
-      e.preventDefault();
+      if (monkView.isInteractive) {
+        e.preventDefault();
+      }
       return {
         type: e.type,
         deltaX: e.deltaX,
@@ -173,6 +175,7 @@ class MonkView extends HTMLElement {
     maxDistance: number;
     lowPerformanceSettings: ReturnType<typeof getLowPerformanceSettings>;
   };
+  public isInteractive: boolean = false;
 
   constructor() {
     super();
@@ -221,15 +224,20 @@ class MonkView extends HTMLElement {
     }
   }
 
+  private handleInteractivityChange(state: boolean) {
+    this.isInteractive = state;
+    this.dispatchEvent(new CustomEvent('interactivity', { detail: { state } }));
+  }
+
   startWorker(canvas: HTMLCanvasElement): void {
-    console.log(canvas)
     const offscreen = canvas.transferControlToOffscreen();
     const worker = new Worker(
       new URL("./offscreencanvas-worker-orbitcontrol.js", import.meta.url),
       { type: "module" }
     );
 
-    const proxy = new ElementProxy(canvas, worker, createEventHandlers());
+    const handlers = createEventHandlers(this);
+    const proxy = new ElementProxy(canvas, worker, handlers);
 
     worker.postMessage({
       type: "start",
@@ -237,6 +245,12 @@ class MonkView extends HTMLElement {
       canvasId: proxy.id,
       ...this.commonOptions,
     }, [offscreen]);
+
+    worker.onmessage = (e) => {
+      if (e.data.type === 'interactivity') {
+          this.handleInteractivityChange(e.data.state);
+      }
+    };
   }
 
   initScene(): void {
@@ -256,6 +270,7 @@ class MonkView extends HTMLElement {
         canvas: this.canvas, 
         inputElement: this.canvas, 
         ...this.commonOptions,
+        onInteractivityChange: (state: boolean) => this.handleInteractivityChange(state)
       });
   }
 
