@@ -15,9 +15,9 @@
       float dotNV = saturate( dot( normal, viewDir ) ); // View-normal angle (0 to 1)
 
       // Your current angle-based control
-      float blurStart = 0.2;  // ~78°
+      float blurStart = 0.3;  // ~78°
       float blurFull = 0.0;   // ~84°
-      float maxMipBias = 1.0;
+      float maxMipBias = 2.0;
       float grazingFactor = smoothstep(blurStart, blurFull, dotNV); // 0 at blurStart, 1 at blurFull
       float mipBias = grazingFactor * maxMipBias; // Max bias at grazing
       float adjustedRoughness = clamp(roughness + mipBias * roughness + geometryRoughness * 0.5, 0.0, 1.0);
@@ -35,7 +35,7 @@
       float radianceGeoLimit = mix(0.5, 1.0, geoFactor); // Reduce radiance on high curvature (e.g., edges)
 
       // Combine with angle-based limit
-      float radianceAngleLimit = mix(1.0, 0.1, grazingFactor); // Your original angle-based limit
+      float radianceAngleLimit = mix(2.0, 0.1, grazingFactor); // Your original angle-based limit
       float radianceLimit = radianceAngleLimit * radianceGeoLimit; // Multiply for combined effect
 
       return envMapColor.rgb * envMapIntensity * radianceLimit;
