@@ -496,19 +496,20 @@ class OrbitControls extends Controls {
 		this._spherical.makeSafe();
 
 
-		// move target to panned location
-		if ( this.enableDamping ) {
+		// Clamp _goalTarget to the spherical boundary around the cursor
+		_v.copy(this._goalTarget).sub(this.cursor);
+		_v.clampLength(this.minTargetRadius, this.maxTargetRadius);
+		this._goalTarget.copy(this.cursor).add(_v);
 
+		// Apply damping or copy _goalTarget to target
+		if (this.enableDamping) {
 			const norm = 1;
 			this.target.x = this.targetXDamper.update(this.target.x, this._goalTarget.x, deltaTimeMS, norm);
 			this.target.y = this.targetYDamper.update(this.target.y, this._goalTarget.y, deltaTimeMS, norm);
 			this.target.z = this.targetZDamper.update(this.target.z, this._goalTarget.z, deltaTimeMS, norm);
-
-	  } else {
-
+		} else {
 			this.target.copy(this._goalTarget);
-			
-	  }
+		}
 
 		// Limit the target distance from the cursor to create a sphere around the center of interest
 		this.target.sub( this.cursor );

@@ -48,18 +48,19 @@ class ThreeSceneManager {
 		this.baseLoadPixelRatio = data.pixelRatio ?? window.devicePixelRatio
 		this.initialRenderPixelRatio = this.lowPerformanceSettings.lowResolution ? data.pixelRatio / 2 : this.baseLoadPixelRatio
 		this.performantRenderPixelRatio = null
-		// this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 4;
-		this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 0
+		this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 4;
+		// this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 0;
 
 		this.pixelRatioVariation = 1 // this to handle screen DPI changes
 
 		this.scene = null
 		this.camera = null
-
-		this.cameraSettings = {
+	
+		this.baseCameraSettings = {
 			targetDistance: data.targetDistance || 1.0,
 			maxDistance: data.targetDistance / 0.9 || Infinity,
 			minDistance: data.minDistance || 0,
+			multiplier: this.cameraMultiplier(this.inputElement.clientHeight / this.inputElement.clientWidth) || 1
 		}
 
 		this.perfSampling = {
@@ -116,6 +117,10 @@ class ThreeSceneManager {
 		this.initScene()
 	}
 
+	// preserves the model in view completely at vertical aspect ratios
+	cameraMultiplier(ratio) { 
+		return (ratio) <= 1 ? 1.0 : 1.0 + 0.2 * (ratio - 1)  }
+
 	initScene() {
 		this.setupRenderer()
 		this.setupCamera()
@@ -148,7 +153,8 @@ class ThreeSceneManager {
 
 	setupCamera() {
 		this.camera = new THREE.PerspectiveCamera(50, 2, 0.1, 100)
-		this.camera.position.z = this.cameraSettings.targetDistance
+		console.log(this.baseCameraSettings.multiplier)
+		this.camera.position.z = this.baseCameraSettings.targetDistance * this.baseCameraSettings.multiplier
 		// this.camera.rotation.y = Math.PI * 0.5;
 	}
 
@@ -156,11 +162,10 @@ class ThreeSceneManager {
 		this.controls = new OrbitControls(this.camera, this.inputElement)
 		this.controls.enabled = false
 		this.controls.enableDamping = true
-		this.controls.dampingFactor = 0.055
 		this.controls.target.set(0, 0, 0)
-		this.controls.maxDistance = this.cameraSettings.maxDistance
-		this.controls.minDistance = this.cameraSettings.minDistance
-		this.controls.decayTime = 100
+		this.controls.maxDistance = this.baseCameraSettings.maxDistance * this.baseCameraSettings.multiplier
+		this.controls.minDistance = this.baseCameraSettings.minDistance * this.baseCameraSettings.multiplier
+		this.controls.maxTargetRadius = 0.3;
 		this.controls.update()
 	}
 
@@ -315,7 +320,7 @@ class ThreeSceneManager {
 		if (this.isInteractive) {
 			this.controls.enabled = true
 			this.controls.stopCameraSmooth()
-			this.controls._goalSpherical.radius = this.cameraSettings.targetDistance * 0.9
+			this.controls._goalSpherical.radius = this.baseCameraSettings.targetDistance * this.baseCameraSettings.multiplier * 0.9
 			this.startReturnModelAnimation()
 		} else {
 			this.controls.enabled = false
@@ -545,18 +550,28 @@ class ThreeSceneManager {
 	}
 
 	handleResize(forceResize = false) {
-		const { clientWidth: width, clientHeight: height, pixelRatio } = this.inputElement
-		this.pixelRatioVariation = pixelRatio / this.baseLoadPixelRatio ?? 1
-		const workingPixelRatio = this.getWorkingPixelRatio()
-		const now = performance.now()
+		const { clientWidth: width, clientHeight: height, pixelRatio } = this.inputElement;
+		this.pixelRatioVariation = pixelRatio / this.baseLoadPixelRatio ?? 1;
+		const workingPixelRatio = this.getWorkingPixelRatio();
+		const now = performance.now();
 
 		if (forceResize || this.needsResize(now, width, height, workingPixelRatio)) {
-			this.updateRendererSize(width, height, workingPixelRatio)
-			this.lastResizeTime = now
-			this.camera.aspect = width / height
-			this.camera.updateProjectionMatrix()
+			 this.updateRendererSize(width, height, workingPixelRatio);
+			 this.lastResizeTime = now;
+			 this.camera.aspect = width / height;
+			 this.camera.updateProjectionMatrix();
+
+			 // Calculate multiplier based on height-to-width ratio
+			 const ratio = height / width;
+			 this.baseCameraSettings.multiplier = this.cameraMultiplier(ratio);
+
+			//  console.log(this.baseCameraSettings.multiplier)
+			//  this.controls._goalSpherical.radius = this.controls._goalSpherical.radius * this.baseCameraSettings.multiplier;
+			this.camera.position.z = this.baseCameraSettings.targetDistance * this.baseCameraSettings.multiplier;
+			 this.controls.maxDistance = this.baseCameraSettings.maxDistance * this.baseCameraSettings.multiplier;
+			 this.controls.minDistance = this.baseCameraSettings.minDistance * this.baseCameraSettings.multiplier;
 		}
-	}
+  }
 
 	needsResize(now, width, height, workingPixelRatio) {
 		if (now - this.lastResizeTime < this.throttleResize) return false
