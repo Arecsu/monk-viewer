@@ -554,7 +554,7 @@ class ThreeSceneManager {
 
 	handleResize(forceResize = false) {
 		const { clientWidth: width, clientHeight: height, pixelRatio } = this.inputElement;
-		this.pixelRatioVariation = pixelRatio / this.baseLoadPixelRatio ?? 1;
+		this.pixelRatioVariation = (pixelRatio / this.baseLoadPixelRatio) || 1;
 		const workingPixelRatio = this.getWorkingPixelRatio();
 		const now = performance.now();
 
