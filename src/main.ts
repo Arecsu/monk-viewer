@@ -6,16 +6,27 @@ interface EventPayload {
   [key: string]: any;
 }
 
+function getPixelRatio(limit: number): number {
+  return Math.min(window.devicePixelRatio || 1, limit);
+}
+
 class ElementProxy {
   private static nextId = 0;
   public readonly id: number = ElementProxy.nextId++;
   private worker: Worker;
   private element: HTMLElement;
   private resizeObserver: ResizeObserver;
+  private limitPixelRatio: number;
 
-  constructor(element: HTMLElement, worker: Worker, handlers: Record<string, (event: Event) => EventPayload>) {
+  constructor(
+    element: HTMLElement,
+    worker: Worker,
+    handlers: Record<string, (event: Event) => EventPayload>,
+    limitPixelRatio: number
+  ) {
     this.worker = worker;
     this.element = element;
+    this.limitPixelRatio = limitPixelRatio;
   
     const sendEvent = (data: EventPayload) => {
       this.worker.postMessage({ type: "event", id: this.id, data });
@@ -31,7 +42,7 @@ class ElementProxy {
         top: rect.top,
         width: this.element.clientWidth,
         height: this.element.clientHeight,
-        pixelRatio: window.devicePixelRatio || 1,
+        pixelRatio: getPixelRatio(this.limitPixelRatio),
       });
     };
   
@@ -152,17 +163,20 @@ const createEventHandlers = (monkView: MonkView) => {
 function getLowPerformanceSettings() {
   const isFirefoxMacintosh = /Macintosh(?!.*KHTML).*Gecko/i.test(navigator.userAgent);
   const isFirefoxAndroid = /Android(?!.*KHTML).*Gecko/i.test(navigator.userAgent);
+  const isAndroid = /Android/i.test(navigator.userAgent);
 
   if (isFirefoxMacintosh || isFirefoxAndroid) {
     return { disableMSAA: true, lowResolution: true };
+  }
+
+  if (isAndroid) {
+    return { disableMSAA: true, lowResolution: false };
   }
 
   return { disableMSAA: false, lowResolution: false };
 }
 
 // main();
-
-
 
 class MonkView extends HTMLElement {
   private canvas: HTMLCanvasElement;
@@ -180,6 +194,7 @@ class MonkView extends HTMLElement {
     }
   };
   public isInteractive: boolean = false;
+  private limitPixelRatio: number = /Android/i.test(navigator.userAgent) ? 2.0 : Infinity;
 
   constructor() {
     super();
@@ -197,7 +212,7 @@ class MonkView extends HTMLElement {
     }
 
     this.commonOptions = {
-      pixelRatio: window.devicePixelRatio || 1,
+      pixelRatio: getPixelRatio(this.limitPixelRatio),
       modelUrl,
       envmapUrl,
       minDistance,
@@ -246,7 +261,7 @@ class MonkView extends HTMLElement {
     );
 
     const handlers = createEventHandlers(this);
-    const proxy = new ElementProxy(canvas, worker, handlers);
+    const proxy = new ElementProxy(canvas, worker, handlers, this.limitPixelRatio);
 
     worker.postMessage({
       type: "start",
