@@ -166,14 +166,14 @@ function getLowPerformanceSettings() {
   const isAndroid = /Android/i.test(navigator.userAgent);
 
   if (isFirefoxMacintosh || isFirefoxAndroid) {
-    return { disableMSAA: true, lowResolution: true };
+    return { disableAA: true, lowResolution: true };
   }
 
   if (isAndroid) {
-    return { disableMSAA: true, lowResolution: false };
+    return { disableAA: true, lowResolution: false };
   }
 
-  return { disableMSAA: false, lowResolution: false };
+  return { disableAA: false, lowResolution: false };
 }
 
 // main();
