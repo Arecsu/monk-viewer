@@ -6,6 +6,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js"
 import { HDRJPGLoader } from "@monogrid/gainmap-js"
 import { DitheringEffect } from "./postprocessing/DitheringEffect"
 // import ModShader from "./mod4_meshphysical_complete.glsl?raw"
+// import ModShader from "./mod.glsl?raw"
 import envmapSpecularAntialias from "./envmap_physical_pars_fragment_specular_antialias.glsl?raw"
 import lightsFragmentMapsSpecularAntialias from "./lights_fragment_maps_specular_antialias.glsl?raw"
 // import ModShader2 from "./meshphysical_vertex.glsl?raw"
@@ -14,7 +15,9 @@ import { BloomEffect, RenderPipeline, ClearPass, GeometryPass, EffectPass, ToneM
 import { NoiseEffect } from "./postprocessing/NoiseEffect"
 
 // import artworkModelUrl from "./McLovin-1024x.glb?url";
-import artworkModelUrl from "./McLovin-1024x-2.glb?url"
+// import artworkModelUrl from "./McLovin-1024x-2.glb?url"
+import artworkModelUrl from "./monk_store_3D_packed.glb?url"
+// import artworkModelUrl from "./NormalTangentTest.glb?url"
 // import artworkModelUrl from "./McLovin-1024x-bevel.glb?url";
 // import HDRIMAP from "./old_bus_depot_2k_HDR.jpg?url";
 import HDRIMAP from "./old_bus_depot_4k_blur.jpg?url"
@@ -363,6 +366,8 @@ class ThreeSceneManager {
 
 				this.model.traverse((child) => {
 					if (child.material) {
+
+						console.log(child.material)
 						child.material.needsUpdate = true
 						child.material.onBeforeCompile = (shader) => {
 							// shader.vertexShader = ModShader2;
@@ -384,8 +389,8 @@ class ThreeSceneManager {
 
 					await this.renderer.compileAsync(this.model, this.camera, this.scene)
 
-					this.mixer = new THREE.AnimationMixer(this.model)
-					const action = this.mixer.clipAction(gltf.animations[0])
+					// this.mixer = new THREE.AnimationMixer(this.model)
+					// const action = this.mixer.clipAction(gltf.animations[0])
 					// action.play();
 
 					this.scene.add(this.model)
@@ -608,7 +613,7 @@ class ThreeSceneManager {
 				this.autoRotateModel(dt)
 			}
 		}
-		if (this.mixer) this.mixer.update(dt)
+		// if (this.mixer) this.mixer.update(dt)
 		// if (this.isInteractive) this.controls.update(dt);
 		this.controls.update(dt)
 	}
