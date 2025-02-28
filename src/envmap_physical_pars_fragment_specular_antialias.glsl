@@ -15,8 +15,8 @@
       float dotNV = saturate( dot( normal, viewDir ) ); // View-normal angle (0 to 1)
 
       // Your current angle-based control
-      float blurStart = 0.3;  // ~78°
-      float blurFull = 0.0;   // ~84°
+      float blurStart = 0.3;  // angle-start
+      float blurFull = 0.0;   // angle-full
       float maxMipBias = 2.0;
       float grazingFactor = smoothstep(blurStart, blurFull, dotNV); // 0 at blurStart, 1 at blurFull
       float mipBias = grazingFactor * maxMipBias; // Max bias at grazing
