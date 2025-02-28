@@ -117,3 +117,13 @@ body {
     rgba(174, 63, 255, 1) 100%
   );
 }
+
+monk-view .ar-link {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  padding: 5px 10px;
+  background: #007bff;
+  color: white;
+  text-decoration: none;
+}

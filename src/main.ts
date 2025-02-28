@@ -1,6 +1,45 @@
 // @ts-ignore
 import { init } from "./shared-orbitcontrols.js";
 
+declare global {
+  interface Window {
+    webkit?: any;
+  }
+}
+
+
+// Device and browser detection
+const IS_ANDROID = /android/i.test(navigator.userAgent);
+const IS_IOS =
+  (/iPad|iPhone|iPod/.test(navigator.userAgent) && !((window as any).MSStream)) ||
+  (/Mac/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+const IS_WKWEBVIEW = Boolean(window.webkit && window.webkit.messageHandlers);
+const IS_AR_QUICKLOOK_CANDIDATE = (() => {
+  if (IS_IOS) {
+    if (!IS_WKWEBVIEW) {
+      const tempAnchor = document.createElement('a');
+      return Boolean(
+        tempAnchor.relList &&
+        tempAnchor.relList.supports &&
+        tempAnchor.relList.supports('ar')
+      );
+    } else {
+      return Boolean(
+        /CriOS\/|EdgiOS\/|FxiOS\/|GSA\/|DuckDuckGo\//.test(navigator.userAgent)
+      );
+    }
+  }
+  return false;
+})();
+const IS_SCENEVIEWER_CANDIDATE =
+  IS_ANDROID && !/firefox|OculusBrowser/i.test(navigator.userAgent);
+let arMode = 'none';
+if (IS_AR_QUICKLOOK_CANDIDATE) {
+  arMode = 'quick-look';
+} else if (!IS_SCENEVIEWER_CANDIDATE) {
+  arMode = 'scene-viewer';
+}
+
 interface EventPayload {
   type: string;
   [key: string]: any;
@@ -227,6 +266,31 @@ class MonkView extends HTMLElement {
     this.appendChild(this.canvas);
     this.logAttributes();
     this.initScene();
+    this.addARLink();
+  }
+
+  private addARLink(): void {
+    if (arMode === 'none') return;
+
+    const modelAttr = arMode === 'quick-look' ? 'model-usdz' : 'model-glb';
+    const modelUrl = this.getAttribute(modelAttr);
+
+    if (!modelUrl) return;
+
+    const anchor = document.createElement('a');
+    anchor.textContent = 'View in AR';
+    anchor.classList.add('ar-link');
+
+    if (arMode === 'quick-look') {
+      anchor.setAttribute('rel', 'ar');
+      anchor.setAttribute('href', modelUrl);
+    } else if (arMode === 'scene-viewer') {
+      const fallbackUrl = window.location.href;
+      const intentUrl = `intent://arvr.google.com/scene-viewer/1.2?file=${encodeURIComponent(modelUrl)}&mode=ar_preferred#Intent;scheme=https;package=com.google.android.googlequicksearchbox;action=android.intent.action.VIEW;S.browser_fallback_url=${encodeURIComponent(fallbackUrl)};end;`;
+      anchor.setAttribute('href', intentUrl);
+    }
+
+    this.appendChild(anchor);
   }
 
   logAttributes(): void {
