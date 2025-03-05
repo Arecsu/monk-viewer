@@ -263,7 +263,7 @@ class OrbitControls extends Controls {
 		const document = this.domElement.getRootNode(); // offscreen canvas compatibility
 		document.addEventListener( 'keydown', this._interceptControlDown, { passive: true, capture: true } );
 
-		this.domElement.style.touchAction = 'none'; // disable touch scroll
+		// this.domElement.style.touchAction = 'none'; // disable touch scroll
 
 	}
 

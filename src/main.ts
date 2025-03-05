@@ -36,7 +36,7 @@ const IS_SCENEVIEWER_CANDIDATE =
 let arMode = 'none';
 if (IS_AR_QUICKLOOK_CANDIDATE) {
   arMode = 'quick-look';
-} else if (!IS_SCENEVIEWER_CANDIDATE) {
+} else if (IS_SCENEVIEWER_CANDIDATE) {
   arMode = 'scene-viewer';
 }
 
@@ -125,21 +125,6 @@ function makeSendPropertiesHandler(properties: string[]) {
   };
 }
 
-function makeTouchEventHandler() {
-  return (e: TouchEvent): EventPayload => {
-    e.preventDefault();
-    return {
-      type: e.type,
-      touches: Array.from(e.touches).map((touch) => ({
-        pageX: touch.pageX,
-        pageY: touch.pageY,
-        clientX: touch.clientX,
-        clientY: touch.clientY,
-      })),
-    };
-  };
-}
-
 const createEventHandlers = (monkView: MonkView) => {
   
   const mouseEventHandler = makeSendPropertiesHandler([
@@ -154,8 +139,16 @@ const createEventHandlers = (monkView: MonkView) => {
     "pageX",
     "pageY",
   ]);
-  
-  const touchEventHandler = makeTouchEventHandler();
+
+  const getTouchPayload = (e: TouchEvent) => ({
+    type: e.type,
+    touches: Array.from(e.touches).map((touch) => ({
+      pageX: touch.pageX,
+      pageY: touch.pageY,
+      clientX: touch.clientX,
+      clientY: touch.clientY,
+    })),
+  });
   
   return {
     // contextmenu:  createHandler<Event>((e) => ({ type: e.type })),
@@ -185,9 +178,14 @@ const createEventHandlers = (monkView: MonkView) => {
       };
     }),
 
-    touchstart:   createHandler<TouchEvent>(touchEventHandler),
-    touchmove:    createHandler<TouchEvent>(touchEventHandler),
-    touchend:     createHandler<TouchEvent>(touchEventHandler),
+    touchstart:   createHandler<TouchEvent>(getTouchPayload),
+    touchend:     createHandler<TouchEvent>(getTouchPayload),
+    touchmove:    createHandler<TouchEvent>((e) => {
+      if (monkView.isInteractive) {
+        e.preventDefault();
+      }
+      return getTouchPayload(e);
+    }),
     
     keydown: createHandler<KeyboardEvent>((e) => ({
       type: e.type,
@@ -226,6 +224,8 @@ class MonkView extends HTMLElement {
     minDistance: number;
     targetDistance: number;
     maxDistance: number;
+    initDelay: number;
+    initDelayInteractive: number;
     lowPerformanceSettings: ReturnType<typeof getLowPerformanceSettings>;
     perfSampling: {
       stabilityDuration: number;
@@ -245,6 +245,8 @@ class MonkView extends HTMLElement {
     const targetDistance = parseFloat(this.getAttribute("target-distance") || "0.8");
     const minDistance = parseFloat(this.getAttribute("min-distance") || "0.1");
     const maxDistance = parseFloat(this.getAttribute("max-distance") || "1.0");
+    const initDelay = parseFloat(this.getAttribute("init-delay") || "0.0");
+    const initDelayInteractive = parseFloat(this.getAttribute("init-delay-interactive") || "0.0");
     const perfSampling = {
       stabilityDuration: parseFloat(this.getAttribute("perf-stability-duration") || "1.0"),
       measureDuration: parseFloat(this.getAttribute("perf-measure-duration") || "0.5")
@@ -257,16 +259,11 @@ class MonkView extends HTMLElement {
       minDistance,
       targetDistance,
       maxDistance,
+      initDelay,
+      initDelayInteractive,
       lowPerformanceSettings: getLowPerformanceSettings(),
       perfSampling
     };
-  }
-
-  connectedCallback(): void {
-    this.appendChild(this.canvas);
-    this.logAttributes();
-    this.initScene();
-    this.addARLink();
   }
 
   private addARLink(): void {
@@ -274,11 +271,14 @@ class MonkView extends HTMLElement {
 
     const modelAttr = arMode === 'quick-look' ? 'model-usdz' : 'model-glb';
     const modelUrl = this.getAttribute(modelAttr);
+    const modelTitle = this.getAttribute('model-title') || document.title || 'model';
+    const isVertical = this.getAttribute('ar-vertical') === "true";
+    const isVerticalString = isVertical ? "true" : "false";
 
     if (!modelUrl) return;
 
     const anchor = document.createElement('a');
-    anchor.textContent = 'View in AR';
+    anchor.textContent = 'AR';
     anchor.classList.add('ar-link');
 
     if (arMode === 'quick-look') {
@@ -286,11 +286,18 @@ class MonkView extends HTMLElement {
       anchor.setAttribute('href', modelUrl);
     } else if (arMode === 'scene-viewer') {
       const fallbackUrl = window.location.href;
-      const intentUrl = `intent://arvr.google.com/scene-viewer/1.2?file=${encodeURIComponent(modelUrl)}&mode=ar_preferred#Intent;scheme=https;package=com.google.android.googlequicksearchbox;action=android.intent.action.VIEW;S.browser_fallback_url=${encodeURIComponent(fallbackUrl)};end;`;
+      const intentUrl = `intent://arvr.google.com/scene-viewer/1.2?file=${encodeURIComponent(modelUrl)}&mode=ar_only&enable_vertical_placement=${isVerticalString}&title=${encodeURIComponent(modelTitle)}#Intent;scheme=https;package=com.google.android.googlequicksearchbox;action=android.intent.action.VIEW;S.browser_fallback_url=${encodeURIComponent(fallbackUrl)};end;`;
       anchor.setAttribute('href', intentUrl);
     }
 
     this.appendChild(anchor);
+  }
+
+  connectedCallback(): void {
+    this.appendChild(this.canvas);
+    this.logAttributes();
+    this.initScene();
+    this.addARLink();
   }
 
   logAttributes(): void {
@@ -314,8 +321,21 @@ class MonkView extends HTMLElement {
 
   private handleInteractivityChange(state: boolean) {
     this.isInteractive = state;
+    if (state) {
+      this.setAttribute('interactive', 'true')
+      this.style.cursor = 'move'
+    } else {
+      this.setAttribute('interactive', 'false')
+      this.style.cursor = 'pointer'
+    }
     this.dispatchEvent(new CustomEvent('interactivity', { detail: { state } }));
   }
+
+  private handleOnLoaded(state: boolean) {
+    this.setAttribute('loaded', 'true')
+    this.dispatchEvent(new CustomEvent('loaded', { detail: { state } }));
+  }
+
 
   startWorker(canvas: HTMLCanvasElement): void {
     const offscreen = canvas.transferControlToOffscreen();
@@ -335,8 +355,13 @@ class MonkView extends HTMLElement {
     }, [offscreen]);
 
     worker.onmessage = (e) => {
-      if (e.data.type === 'interactivity') {
+      switch (e.data.type) {
+        case 'interactivity':
           this.handleInteractivityChange(e.data.state);
+          break
+        case 'loaded':
+          this.handleOnLoaded(e.data.state);
+          break
       }
     };
   }
@@ -358,7 +383,8 @@ class MonkView extends HTMLElement {
         canvas: this.canvas, 
         inputElement: this.canvas, 
         ...this.commonOptions,
-        onInteractivityChange: (state: boolean) => this.handleInteractivityChange(state)
+        e_interactivityChange: (state: boolean) => this.handleInteractivityChange(state),
+        e_loaded: (state: boolean) => this.handleOnLoaded(state)
       });
   }
 

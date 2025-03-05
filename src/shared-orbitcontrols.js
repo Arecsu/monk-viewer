@@ -21,7 +21,7 @@ import artworkModelUrl from "./monk_store_3D_packed.glb?url"
 // import artworkModelUrl from "./McLovin-1024x-bevel.glb?url";
 // import HDRIMAP from "./old_bus_depot_2k_HDR.jpg?url";
 import HDRIMAP from "./old_bus_depot_4k_blur.jpg?url"
-import { easeOutQuart, easeInCubic } from "js-easing-functions"
+import { easeOutQuart, easeInCubic, easeOutCubic } from "js-easing-functions"
 // import HDRIMAP from "./old_bus_depot_4k.jpg?url";
 // import HDRIMAP from "./hanger_exterior_cloudy_4k.jpg?url";
 
@@ -79,6 +79,9 @@ class ThreeSceneManager {
 
 		this.initialModelRotation = null
 
+		this.initDelay = data.initDelay || 0.0;
+		this.initDelayInteractive = data.initDelayInteractive || 0.0;
+
 		this.returnModelAnimation = {
 			easeFunc: easeOutQuart,
 			isActive: false,
@@ -87,6 +90,15 @@ class ThreeSceneManager {
 			startTime: 0,
 			duration: 1.5, // Seconds for the return animation
 		}
+
+		this.decelerationAnimation = {
+			easeFunc: easeOutCubic,
+			isActive: false,
+			startQuaternion: null,
+			targetQuaternion: null,
+			startTime: 0,
+			duration: 1.0, // Adjust duration as needed
+		};
 
 		this.interactionState = {
 			startX: 0,
@@ -100,9 +112,10 @@ class ThreeSceneManager {
 
 		this.isInteractive = false
 		this.lastInteractiveToggleTime = 0
-		this.throttleInteractiveToggle = 250
-		this.onInteractivityChange = data.onInteractivityChange || (() => {})
-		this.onInteractivityChange(this.isInteractive)
+		this.throttleInteractiveToggle = 150
+		
+		this.e_interactivityChange = data.e_interactivityChange || (() => {})
+		this.e_loaded = data.e_loaded || (() => {})
 
 		this.clock = new THREE.Clock()
 		this.hasAborted = false
@@ -202,7 +215,7 @@ class ThreeSceneManager {
 				new ToneMappingEffect({
 					toneMapping: ToneMapping.REINHARD,
 				}),
-				//  new DitheringEffect()
+				 new DitheringEffect()
 			)
 			this.pipeline.add(effects)
 
@@ -305,6 +318,7 @@ class ThreeSceneManager {
 	}
 
 	toggleInteractiveMode() {
+		if (!this.canInteract()) return
 		const now = performance.now()
 		const cameraRotationDecay = this.controls.getMaxApproximateRotationDecayTimerMS() / 1000
 		// Only toggle if 500ms have passed since the last toggle
@@ -314,18 +328,36 @@ class ThreeSceneManager {
 		this.lastInteractiveToggleTime = now
 
 		this.isInteractive = !this.isInteractive
-		this.onInteractivityChange(this.isInteractive)
+		this.e_interactivityChange(this.isInteractive)
 
 		if (this.isInteractive) {
-			this.controls.enabled = true
-			this.controls.stopCameraSmooth()
-			this.controls._goalSpherical.radius = this.baseCameraSettings.targetDistance * this.baseCameraSettings.multiplier * 0.9
-			this.startReturnModelAnimation()
+			this.controls.enabled = true;
+			this.controls.stopCameraSmooth();
+			this.controls._goalSpherical.radius = this.baseCameraSettings.targetDistance * this.baseCameraSettings.multiplier * 0.9;
+			this.startReturnModelAnimation();
 		} else {
-			this.controls.enabled = false
-			this.returnModelAnimation.isActive = false
-			this.rotationModelParams.startTime = this.clock.getElapsedTime() + Math.pow(Math.max(cameraRotationDecay - 0.35, 0), 0.5)
-			this.controls.returnToInit()
+			// Exiting interactive mode: partial deceleration
+			this.controls.enabled = false;
+
+			if (this.returnModelAnimation.isActive) {
+				// Start deceleration to 20% towards initial from current position
+				this.decelerationAnimation.startQuaternion = this.model.quaternion.clone();
+				this.decelerationAnimation.targetQuaternion = this.model.quaternion.clone().slerp(
+					this.initialModelRotation, // Target 20% closer to initial
+					0.5 // Adjust this value (0.2 = 20% towards initial)
+				);
+				this.decelerationAnimation.startTime = this.clock.getElapsedTime();
+				this.decelerationAnimation.isActive = true;
+			}
+
+			this.returnModelAnimation.isActive = false;
+
+			// Delay auto-rotation until after deceleration
+			const delay = Math.pow(Math.max(cameraRotationDecay - 0.55, 0), 0.3);
+			const decelerationDelay = this.decelerationAnimation.isActive ? this.decelerationAnimation.duration - 0.4 : 0;
+			this.rotationModelParams.startTime = this.clock.getElapsedTime() + delay + decelerationDelay;
+
+			this.controls.returnToInit();
 		}
 	}
 
@@ -366,8 +398,6 @@ class ThreeSceneManager {
 
 				this.model.traverse((child) => {
 					if (child.material) {
-
-						console.log(child.material)
 						child.material.needsUpdate = true
 						child.material.onBeforeCompile = (shader) => {
 							// shader.vertexShader = ModShader2;
@@ -537,6 +567,11 @@ class ThreeSceneManager {
 	startRenderLoop() {
 		this.clock.start()
 		this.setupInteraction()
+		this.e_loaded(true)
+		setTimeout(() => // signal to change cursor in main.ts
+			this.e_interactivityChange(this.isInteractive), 
+			this.initDelayInteractive * 1000
+		)
 		const render = () => {
 			this.handleResize()
 			this.updateScene()
@@ -601,22 +636,49 @@ class ThreeSceneManager {
 		// this.pipeline.setSize
 	}
 
+	canAnimate() {
+		return (this.clock.elapsedTime - this.initDelay >= 0)
+	}
+
+	canInteract() {
+		return (this.clock.elapsedTime - this.initDelayInteractive >= 0)
+	}
+
 	updateScene() {
 		const dt = this.clock.getDelta()
 		// Optionally: console.log(dt);
-		if (this.model) {
+		if (this.model && this.canAnimate()) {
 			if (this.isInteractive) {
 				if (this.returnModelAnimation.isActive) {
-					this.updateReturnModelAnimation()
+					this.updateReturnModelAnimation();
 				}
 			} else {
-				this.autoRotateModel(dt)
+				if (this.decelerationAnimation.isActive) {
+					this.updateDecelerationAnimation();
+				} else {
+					this.autoRotateModel(dt);
+				}
 			}
 		}
 		// if (this.mixer) this.mixer.update(dt)
 		// if (this.isInteractive) this.controls.update(dt);
 		this.controls.update(dt)
 	}
+
+	updateDecelerationAnimation() {
+		const elapsed = this.clock.getElapsedTime() - this.decelerationAnimation.startTime;
+		const t = Math.min(elapsed, this.decelerationAnimation.duration);
+		const easedT = this.decelerationAnimation.easeFunc(t, 0, 1, this.decelerationAnimation.duration);
+
+		this.model.quaternion.copy(
+			this.decelerationAnimation.startQuaternion.clone().slerp(this.decelerationAnimation.targetQuaternion, easedT)
+		);
+
+		if (t >= this.decelerationAnimation.duration) {
+			this.decelerationAnimation.isActive = false;
+		}
+	}
+
 
 	updateReturnModelAnimation() {
 		const elapsed = this.clock.getElapsedTime() - this.returnModelAnimation.startTime

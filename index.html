@@ -13,9 +13,8 @@
 
 <body>
   <div id="my-keen-slider" class="keen-slider">
-    <div class="keen-slider__slide number-slide1">1</div>
     <div class="keen-slider__slide number-slide2">
-      <span>[LOADING]</span>
+      <span class="loading-monk-view">LOADING</span>
       <monk-view 
         id="c"
         model="https://cdn.shopify.com/3d/models/o/9809bfe1dfd85903/McLovin-1024x.glb"
@@ -24,11 +23,16 @@
         max-distance="2.0"
         perf-stability-duration="1.0"
         perf-measure-duration="0.5"
-        model-glb="https://example.com/ar-model.glb" 
+        init-delay="0"
+        init-delay-interactive="0.6"
+        model-title="Hola"
+        model-glb="https://cdn.shopify.com/3d/models/o/9809bfe1dfd85903/McLovin-1024x.glb"
         model-usdz="https://example.com/ar-model.usdz"
+        ar-vertical="true"
         envmap="https://raw.githubusercontent.com/Arecsu/model-viewer/monk/packages/shared-assets/environments/old_bus_depot_2k_HDR.jpg">
       </monk-view>
     </div>
+    <div class="keen-slider__slide number-slide1">1</div>
     <div class="keen-slider__slide number-slide3">3</div>
     <div class="keen-slider__slide number-slide4">4</div>
     <div class="keen-slider__slide number-slide5">5</div>
@@ -55,6 +59,9 @@
       isInteractive ? disableDragSlider(slider) : enableDragSlider(slider)
     });
 
+    monkView.addEventListener('loaded', (e) => {
+      document.querySelector('.loading-monk-view').textContent = 'LOADED'
+    })
 
   </script>
   <script type="module" src="/src/main.ts"></script>

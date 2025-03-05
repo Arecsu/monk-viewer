@@ -50,8 +50,12 @@ class ElementProxyReceiver extends EventDispatcher {
 		this.dispatchEvent(data)
 	}
 
-	setInteractivity(state) {
+	m_interactivity(state) {
 		self.postMessage({ type: "interactivity", id: this.id, state })
+	}
+
+	m_loaded(state) {
+		self.postMessage({ type: "loaded", id: this.id, state })
 	}
 
 	focus() {
@@ -92,9 +96,12 @@ function start(data) {
 		minDistance: data.minDistance,
 		targetDistance: data.targetDistance,
 		maxDistance: data.maxDistance,
+		initDelay: data.initDelay,
+		initDelayInteractive: data.initDelayInteractive,
 		lowPerformanceSettings: data.lowPerformanceSettings,
 		perfSampling: data.perfSampling,
-		onInteractivityChange: (state) => proxy.setInteractivity(state)
+		e_interactivityChange: (state) => proxy.m_interactivity(state),
+		e_loaded: (state) => proxy.m_loaded(state)
 	})
 }
 
