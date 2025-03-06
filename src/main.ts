@@ -338,7 +338,7 @@ class MonkView extends HTMLElement {
   startWorker(canvas: HTMLCanvasElement): void {
     const offscreen = canvas.transferControlToOffscreen();
     const worker = new Worker(
-      new URL("./offscreencanvas-worker-orbitcontrol.js", import.meta.url),
+      new URL("./offscreencanvas-worker.js", import.meta.url),
       { type: "module" }
     );
 
