@@ -1,29 +1,13 @@
 import * as THREE from "three"
-import { easeInOutCubic, easeInOutBack } from "js-easing-functions"
-// import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { OrbitControls } from "./OrbitControls.js"
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js"
 import { HDRJPGLoader } from "@monogrid/gainmap-js"
 import { DitheringEffect } from "./postprocessing/DitheringEffect"
-// import ModShader from "./mod4_meshphysical_complete.glsl?raw"
-// import ModShader from "./mod.glsl?raw"
-import envmapSpecularAntialias from "./envmap_physical_pars_fragment_specular_antialias.glsl?raw"
-import lightsFragmentMapsSpecularAntialias from "./lights_fragment_maps_specular_antialias.glsl?raw"
-// import ModShader2 from "./meshphysical_vertex.glsl?raw"
-
+import envmapSpecularAntialias from "./shaders/envmap_physical_pars_fragment_specular_antialias.glsl?raw"
+import lightsFragmentMapsSpecularAntialias from "./shaders/lights_fragment_maps_specular_antialias.glsl?raw"
 import { BloomEffect, RenderPipeline, ClearPass, GeometryPass, EffectPass, ToneMappingEffect, ToneMapping } from "postprocessing"
-import { NoiseEffect } from "./postprocessing/NoiseEffect"
-
-// import artworkModelUrl from "./McLovin-1024x.glb?url";
-// import artworkModelUrl from "./McLovin-1024x-2.glb?url"
-// import artworkModelUrl from "./monk_store_3D_packed.glb?url"
-// import artworkModelUrl from "./NormalTangentTest.glb?url"
-// import artworkModelUrl from "./McLovin-1024x-bevel.glb?url";
-// import HDRIMAP from "./old_bus_depot_2k_HDR.jpg?url";
-import HDRIMAP from "./old_bus_depot_4k_blur.jpg?url"
+// import HDRIMAP from "./envmaps/old_bus_depot_4k_blur.jpg?url"
 import { easeOutQuart, easeInCubic, easeOutCubic } from "js-easing-functions"
-// import HDRIMAP from "./old_bus_depot_4k.jpg?url";
-// import HDRIMAP from "./hanger_exterior_cloudy_4k.jpg?url";
 
 class ThreeSceneManager {
 	constructor(data) {
