@@ -50,6 +50,7 @@ function workerChunkPlugin() {
 }
 
 export default defineConfig({
+  base: "/monk-viewer/",
   build: {
     minify: true, // Adjust based on your needs
     modulePreload: false, // Avoids document references
