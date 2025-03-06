@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import path from "path";
+import { version } from "./package.json"; // Import your version
 
 const manualChunks = {
   manualChunks(id) {
@@ -56,7 +57,18 @@ export default defineConfig({
       input: {
         main: path.resolve(__dirname, "index.html"),
       },
-      // output: manualChunks,
+      output: {
+        entryFileNames: (chunkInfo) => {
+          // Only rename the main entry point to monk-viewer
+          // ignore the css file
+          if (chunkInfo.name === 'main') {
+            return `assets/monk-viewer-${version}.js`;
+          }
+          return `assets/[name]-${version}.js`;
+        },
+        chunkFileNames: `assets/[name]-${version}.js`,
+        assetFileNames: `assets/[name]-${version}.[ext]`
+      },
     },
   },
   worker: {
