@@ -142,7 +142,7 @@ monkView.addEventListener('loaded', (e) => {
 
 This is not really a library. It should be manually copy-pasted and used in a given project.
 
-`src/main.ts` is the starting point and Web Components API declaration. It will invoke the `renderer` if no offscreen-canvas can be used. Otherwise, it will use `offscreencanvas-worker` to proxy between it and `renderer`
-`offscreencanvas-worker` is the worker and proxy between JS main thread and `renderer`
-`renderer` is the main 3D scene and logic
-`OrbitControls.js` is a fork of Three.js OrbitControls with bug fixes and quality of life modifications to add smoother interactions and animations. Makes usage of `Damper.ts` which is derived from `@google/model-viewer` project.
+- `src/main.ts` is the starting point and Web Components API declaration. It will invoke the `renderer` if no offscreen-canvas can be used. Otherwise, it will use `offscreencanvas-worker` to proxy between it and `renderer`
+- `offscreencanvas-worker` is the worker and proxy between JS main thread and `renderer`
+- `renderer` is the main 3D scene and logic
+- `OrbitControls.js` is a fork of Three.js OrbitControls with bug fixes and quality of life modifications to add smoother interactions and animations. Makes usage of `Damper.ts` which is derived from `@google/model-viewer` project.
