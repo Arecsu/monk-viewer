@@ -1,4 +1,4 @@
-import { init } from "./shared-orbitcontrols.js"
+import { init } from "./renderer.js"
 import { EventDispatcher } from "three"
 
 function noop() {}

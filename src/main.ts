@@ -1,5 +1,5 @@
 // @ts-ignore
-import { init } from "./shared-orbitcontrols.js";
+import { init } from "./renderer.js";
 
 declare global {
   interface Window {
