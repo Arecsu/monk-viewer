@@ -1,7 +1,6 @@
 import { defineConfig } from "vite";
 import path from "path";
 
-// Common chunks configuration
 const manualChunks = {
   manualChunks(id) {
     switch (true) {
@@ -11,31 +10,60 @@ const manualChunks = {
         return "vendor-three";
       case id.includes("gainmap-js"):
         return "gainmap-js";
-      case id.includes("postprocessing"):
+      case id.includes("node_modules/postprocessing"):
         return "postprocessing"
+      // case id.includes("renderer"):
+        // return "renderer"
     }
   },
 };
 
+function workerChunkPlugin() {
+  return {
+    name: "worker-chunk-plugin",
+    apply: "build",
+    enforce: "pre",
+    async resolveId(source, importer) {
+      if (source.endsWith("?worker")) {
+        const resolved = await this.resolve(source.split("?")[0], importer);
+        return "\0" + resolved?.id + "?worker-chunk";
+      }
+    },
+    load(id) {
+      if (id.startsWith("\0") && id.endsWith("?worker-chunk")) {
+        const referenceId = this.emitFile({
+          type: "chunk",
+          id: id.slice(1).split("?")[0],
+        });
+        return `
+          export default function WorkerWrapper() {
+            return new Worker(
+              import.meta.ROLLUP_FILE_URL_${referenceId},
+              { type: "module" }
+            );
+          }
+        `;
+      }
+    },
+  };
+}
+
 export default defineConfig({
-  base: "/monk-viewer/",
   build: {
+    minify: true, // Adjust based on your needs
+    modulePreload: false, // Avoids document references
     rollupOptions: {
       input: {
         main: path.resolve(__dirname, "index.html"),
-        "offscreencanvas-worker-orbitcontrol": path.resolve(
-          __dirname,
-          "src/offscreencanvas-worker-orbitcontrol.js",
-        ),
       },
-      output: manualChunks,
+      // output: manualChunks,
     },
   },
   worker: {
     format: "es",
-    plugins: [],
-    rollupOptions: {
-      output: manualChunks,
-    },
+    // rollupOptions: {
+      // output: manualChunks,
+    // },
   },
+  plugins: [workerChunkPlugin()],
 });

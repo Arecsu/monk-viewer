@@ -1,5 +1,6 @@
 // @ts-ignore
 import { init } from "./renderer.js";
+import OffscreenCanvasWorker from './offscreencanvas-worker.js?worker'
 
 declare global {
   interface Window {
@@ -337,10 +338,7 @@ class MonkView extends HTMLElement {
 
   startWorker(canvas: HTMLCanvasElement): void {
     const offscreen = canvas.transferControlToOffscreen();
-    const worker = new Worker(
-      new URL("./offscreencanvas-worker.js", import.meta.url),
-      { type: "module" }
-    );
+    const worker = new OffscreenCanvasWorker();
 
     const handlers = createEventHandlers(this);
     const proxy = new ElementProxy(canvas, worker, handlers, this.limitPixelRatio);
