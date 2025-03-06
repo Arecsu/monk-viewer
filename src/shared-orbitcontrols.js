@@ -16,7 +16,7 @@ import { NoiseEffect } from "./postprocessing/NoiseEffect"
 
 // import artworkModelUrl from "./McLovin-1024x.glb?url";
 // import artworkModelUrl from "./McLovin-1024x-2.glb?url"
-import artworkModelUrl from "./monk_store_3D_packed.glb?url"
+// import artworkModelUrl from "./monk_store_3D_packed.glb?url"
 // import artworkModelUrl from "./NormalTangentTest.glb?url"
 // import artworkModelUrl from "./McLovin-1024x-bevel.glb?url";
 // import HDRIMAP from "./old_bus_depot_2k_HDR.jpg?url";
@@ -135,8 +135,8 @@ class ThreeSceneManager {
 
 		Promise.all([this.setupPostProcessing(), this.loadAssets()])
 			.then(() => {
-				// this.startPerformanceSamplingLoop();
-				this.startRenderLoop()
+				this.startPerformanceSamplingLoop();
+				// this.startRenderLoop()
 			})
 			.catch((error) => {
 				this.abortLoading(error)
@@ -505,13 +505,13 @@ class ThreeSceneManager {
 			console.log(`Applying quality settings for FPS: ${fps.toFixed(1)}`)
 
 			// Disable MSAA if FPS is low
-			if (fps < 55 && this.msaaSamples > 0) {
-				this.msaaSamples = 0
-				this.resetPostProcessing()
-			}
+			// if (fps < 55 && this.msaaSamples > 0) {
+				// this.msaaSamples = 0
+				// this.resetPostProcessing()
+			// }
 
 			// Adjust render resolution
-			if (fps < 45) {
+			if (fps < 50) {
 				const targetFPS = 75
 				const fpsRatio = Math.min(fps / targetFPS, 1)
 				const potentialPixelRatio = Math.sqrt(this.initialRenderPixelRatio ** 2.0 * fpsRatio)
@@ -561,17 +561,22 @@ class ThreeSceneManager {
 		// Set timer to start counting the animation from there
 		this.clock.start()
 		this.setupInteraction()
-		requestAnimationFrame(measureFrame)
-	}
-
-	startRenderLoop() {
-		this.clock.start()
-		this.setupInteraction()
 		this.e_loaded(true)
 		setTimeout(() => // signal to change cursor in main.ts
 			this.e_interactivityChange(this.isInteractive), 
 			this.initDelayInteractive * 1000
 		)
+		requestAnimationFrame(measureFrame)
+	}
+
+	startRenderLoop() {
+		// this.clock.start()
+		// this.setupInteraction()
+		// this.e_loaded(true)
+		// setTimeout(() => // signal to change cursor in main.ts
+		// 	this.e_interactivityChange(this.isInteractive), 
+		// 	this.initDelayInteractive * 1000
+		// )
 		const render = () => {
 			this.handleResize()
 			this.updateScene()
