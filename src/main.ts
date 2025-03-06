@@ -219,8 +219,8 @@ class MonkView extends HTMLElement {
   private canvas: HTMLCanvasElement;
   private commonOptions: {
     pixelRatio: number;
-    modelUrl: string;
-    envmapUrl: string;
+    modelUrl: string | null;
+    envmapUrl: string | null;
     minDistance: number;
     targetDistance: number;
     maxDistance: number;
@@ -240,8 +240,8 @@ class MonkView extends HTMLElement {
     this.canvas = document.createElement("canvas");
 
     // Extract attributes once and build the options object.
-    const modelUrl = this.getAttribute("model") || "";
-    const envmapUrl = this.getAttribute("envmap") || "";
+    const modelUrl = this.isValidURL(this.getAttribute("model") || "");
+    const envmapUrl = this.isValidURL(this.getAttribute("envmap") || "");
     const targetDistance = parseFloat(this.getAttribute("target-distance") || "0.8");
     const minDistance = parseFloat(this.getAttribute("min-distance") || "0.1");
     const maxDistance = parseFloat(this.getAttribute("max-distance") || "1.0");
@@ -270,12 +270,11 @@ class MonkView extends HTMLElement {
     if (arMode === 'none') return;
 
     const modelAttr = arMode === 'quick-look' ? 'model-usdz' : 'model-glb';
-    const modelUrl = this.getAttribute(modelAttr);
+    const modelUrl = this.isValidURL(this.getAttribute(modelAttr) || "");
+    if (!modelUrl) return;
     const modelTitle = this.getAttribute('model-title') || document.title || 'model';
     const isVertical = this.getAttribute('ar-vertical') === "true";
     const isVerticalString = isVertical ? "true" : "false";
-
-    if (!modelUrl) return;
 
     const anchor = document.createElement('a');
     anchor.textContent = 'AR';
@@ -309,13 +308,12 @@ class MonkView extends HTMLElement {
     console.log("Envmap URL:", this.commonOptions.envmapUrl);
   }
 
-  private isValidURL(url: string): boolean {
-    if (!url) return false;
+  private isValidURL(url: string): string | null {
+    if (!url) return null;
     try {
-      new URL(url, document.baseURI);
-      return true;
+      return new URL(url, document.baseURI).href;
     } catch (e) {
-      return false;
+      return null;
     }
   }
 
@@ -369,10 +367,7 @@ class MonkView extends HTMLElement {
   initScene(): void {
     if (!this.canvas) return;
 
-    const hasValidModel = this.isValidURL(this.commonOptions.modelUrl);
-    const hasValidEnvmap = this.isValidURL(this.commonOptions.envmapUrl);
-
-    if (!(hasValidModel && hasValidEnvmap)) {
+    if (!(this.commonOptions.modelUrl && this.commonOptions.envmapUrl)) {
       console.warn("No valid model or envmap found. Scene won't be initialized.");
       return;
     }
