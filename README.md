@@ -31,7 +31,7 @@ Additional contribution to @monogrid/gainmap-js which made it compatible with we
 
 - Chrome precise FPS measurement is just pain. It is not possible. So the best way to make sure every device will run as smooth as they can is to lower graphics features across as much devices as possible. My current implementation disables MSAA for Chrome on Android, leaving it only mostly for iOS devices and desktop systems (only at x2 MSAA, which is enough if the resolution is high enough)
 - Same as this, Firefox on Mac and Android works horrible with MSAA, high resolution and offscreen canvas. MSAA is disabled and pixel ratio is lowered.
-- Normal canvas - non offscreen - have not implemented disabling scroll interaction (e.preventDefault() on touchmove) when the object is non interactive with OrbitControls. Offscreen canvas does it and works great though.
+- Normal canvas - non offscreen - have not implemented disabling scroll interaction (e.preventDefault() on touchmove) when the object is not interactive with OrbitControls. So you basically can't scroll a webpage if you're trying to do it from the canvas. With offscreen canvas you can do it though.
 - Effects like SMAA in `postprocessing` won't work in offscreen canvas mode because they depend on browser features like Image Decoding which are only available in javascript's main thread. Considering porting the effect to work on a web worker somehow.
 
 ## Using it
@@ -47,18 +47,18 @@ pnpm run build
 Inside `dist/assets/`, you will find:
 
 ```
-monk-viewer-1.0.0.js
-offscreencanvas-worker-1.0.0.js
-renderer-1.0.0.js
+monk-viewer-1.1.0.js
+offscreencanvas-worker-1.1.0.js
+renderer-1.1.0.js
 ```
 
 In your HTML document
 
 ```html
-<script crossorigin type="module" src="monk-viewer-1.0.0.js"></script>
+<script crossorigin type="module" src="monk-viewer-1.1.0.js"></script>
 ```
 
-And serve `offscreencanvas-worker-1.0.0.js` and `renderer-1.0.0.js` from the same path as `monk-viewer-1.0.0.js` for them to be imported by `monk-viewer-1.0.0.js` correctly.
+And serve `offscreencanvas-worker-1.1.0.js` and `renderer-1.1.0.js` from the same path as `monk-viewer-1.1.0.js` for them to be imported by `monk-viewer-1.1.0.js` correctly.
 
 ### The HTML component:
 
@@ -165,34 +165,34 @@ monkView.addEventListener('loaded', (e) => { // triggers when the renderer and s
 In case of using `startup="manual"`:
 
 ```javascript
-    let observer
-    const monkView = document.getElementById('viewer');
+let observer
+const monkView = document.getElementById('viewer');
 
-    customElements.whenDefined('monk-view').then(() => {
-      observer = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-          if (entry.isIntersecting) {
+customElements.whenDefined('monk-view').then(() => {
+  observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
 
-            // If assets are loaded, renderer will start.
-            // If not, will do it as soon as assets are ready
-            monkView.attemptInit();
+        // If assets are loaded, renderer will start.
+        // If not, will do it as soon as assets are ready
+        monkView.attemptInit();
 
-          } else {
+      } else {
 
-            // If the renderer has not yet started, will prevent it to execute. 
-            // Won't stop execution of an already executed renderer
-            monkView.abortInit(); 
+        // If the renderer has not yet started, will prevent it to execute. 
+        // Won't stop execution of an already executed renderer
+        monkView.abortInit(); 
 
-          }
-        });
-      }, { threshold: 0.5 });
-
-      observer.observe(monkView);
+      }
     });
+  }, { threshold: 0.5 });
 
-    monkView.addEventListener('loaded', (e) => {
-      if (observer) observer.disconnect();
-    });
+  observer.observe(monkView);
+});
+
+monkView.addEventListener('loaded', (e) => {
+  if (observer) observer.disconnect();
+});
 ```
 
 ## Method 2: custom project
