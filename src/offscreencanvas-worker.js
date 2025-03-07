@@ -123,6 +123,12 @@ const handlers = {
 	event: proxyManager.handleEvent,
 	enableRendering: () => sceneManager.enableRendering(),
 	disableRendering: () => sceneManager.disableRendering(),
+	dispose: () => {
+		if (sceneManager) {
+		  sceneManager.dispose();
+		  sceneManager = null;
+		}
+	},
 }
 
 self.onmessage = function (e) {

@@ -109,6 +109,7 @@ class ThreeSceneManager {
 		this.isReady = false; // Assets loaded?
 		this.shouldStart = this.startupMode === "auto"; // Should start rendering? By default yes
 		this.hasStarted = false; // Has rendering started?
+		this.isRendering = false;
 
 		this.hasAborted = false
 		this.initScene()
@@ -534,6 +535,7 @@ class ThreeSceneManager {
 			// FPS timing than rAF which might be off-sync sometimes
 
 			// Update scene with current time
+			if (!this.isRendering) return;
 			this.handleResize()
 			this.updateScene()
 			this.pipeline.render()
@@ -568,6 +570,7 @@ class ThreeSceneManager {
 		this.clock.start()
 		this.setupInteraction()
 		this.e_loaded(true)
+		this.isRendering = true
 		setTimeout(() => // signal to change cursor in main.ts
 			this.e_interactivityChange(this.isInteractive), 
 			this.initDelayInteractive * 1000
@@ -584,6 +587,7 @@ class ThreeSceneManager {
 		// 	this.initDelayInteractive * 1000
 		// )
 		const render = () => {
+			if (!this.isRendering) return;
 			this.handleResize()
 			this.updateScene()
 			this.pipeline.render()
@@ -604,6 +608,8 @@ class ThreeSceneManager {
 	}
 
 	handleResize(forceResize = false) {
+		if (!this.renderer) return; // Exit early if renderer is disposed
+		
 		const { clientWidth: width, clientHeight: height, pixelRatio } = this.inputElement;
 		this.pixelRatioVariation = (pixelRatio / this.baseLoadPixelRatio) || 1;
 		const workingPixelRatio = this.getWorkingPixelRatio();
@@ -717,6 +723,61 @@ class ThreeSceneManager {
 
 		this.model.rotateY(-this.rotationModelParams.currentSpeed * dt)
 	}
+
+	dispose() {
+		this.isRendering = false; // Stop the render loop first
+
+		if (this.renderer) {
+		  this.renderer.dispose();
+		  if (this.renderer.forceContextLoss) this.renderer.forceContextLoss(); // Force WebGL context loss if supported
+		  this.renderer = null;
+		}
+  
+		// Dispose of the post-processing pipeline
+		if (this.pipeline) {
+		  this.pipeline.dispose();
+		  this.pipeline = null;
+		}
+  
+		if (this.scene && this.scene.environment) {
+		  this.scene.environment.dispose();
+		  this.scene.environment = null;
+		}
+  
+		if (this.scene) {
+		  this.scene.traverse((object) => {
+			 if (object.geometry) {
+				object.geometry.dispose();
+			 }
+			 if (object.material) {
+				if (Array.isArray(object.material)) {
+				  object.material.forEach((mat) => mat.dispose());
+				} else {
+				  object.material.dispose();
+				}
+			 }
+			 if (object.texture) {
+				object.texture.dispose();
+			 }
+		  });
+		  this.scene = null;
+		}
+  
+		if (this.controls) {
+		  this.controls.dispose();
+		  this.controls = null;
+		}
+  
+		if (this.mixer) {
+		  this.mixer.stopAllAction();
+		  this.mixer = null;
+		}
+  
+		// Clear references
+		this.camera = null;
+		this.model = null;
+		this.initialModelRotation = null;
+	 }
 }
 
 // Initialization function

@@ -238,7 +238,8 @@ class MonkView extends HTMLElement {
   private limitPixelRatio: number = /Android/i.test(navigator.userAgent) ? 2.0 : Infinity;
   private sceneManager: any = null;
   private worker: Worker | null = null;
-  // private canInitialize: boolean = false;
+  private proxy: ElementProxy | null = null;
+  // private canInitialize: boolean = false; // unused
 
   constructor() {
     super();
@@ -352,12 +353,12 @@ class MonkView extends HTMLElement {
     this.worker = worker;
 
     const handlers = createEventHandlers(this);
-    const proxy = new ElementProxy(canvas, worker, handlers, this.limitPixelRatio);
+    this.proxy = new ElementProxy(canvas, worker, handlers, this.limitPixelRatio);
 
     worker.postMessage({
       type: "start",
       canvas: offscreen,
-      canvasId: proxy.id,
+      canvasId: this.proxy.id,
       ...this.commonOptions,
     }, [offscreen]);
 
@@ -376,8 +377,37 @@ class MonkView extends HTMLElement {
     };
   }
 
+  private dispose(): void {
+    if (this.worker) {
+      // Worker scenario
+      this.worker.postMessage({ type: "dispose" }); // dispose() in renderer.js
+      this.worker.terminate();
+      this.worker = null;
+      if (this.proxy) {
+        this.proxy.disconnect(); // Disconnect ResizeObserver
+        this.proxy = null;
+      }
+    } else if (this.sceneManager) {
+      // Main thread scenario
+      this.sceneManager.dispose();
+      this.sceneManager = null;
+    }
+    // Remove canvas if still attached
+    if (this.canvas && this.canvas.parentNode) {
+      this.canvas.parentNode.removeChild(this.canvas);
+    }
+  }
+
+  disconnectedCallback(): void {
+    this.dispose();
+  }
+
+  public disposeRenderer(): void {
+    this.dispose();
+  }
+
   attemptInit(): void {
-    // this.canInitialize = true;
+    // this.canInitialize = true; // unused
     if (this.worker) {
       this.worker.postMessage({ type: "enableRendering" });
     } else if (this.sceneManager) {
@@ -386,7 +416,7 @@ class MonkView extends HTMLElement {
   }
 
   abortInit(): void {
-    // this.canInitialize = false;
+    // this.canInitialize = false; // unused
     if (this.worker) {
       this.worker.postMessage({ type: "disableRendering" });
     } else if (this.sceneManager) {
