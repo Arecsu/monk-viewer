@@ -28,7 +28,7 @@
         perf-measure-duration="0.2"
         init-delay="0"
         init-delay-interactive="1.0"
-        offscreencanvas="false"
+        offscreencanvas="true"
         model-title="False Enlightenment"
         model-glb="https://media.martyr.shop/monk/glb/False_Awakening.glb"
         model-usdz="https://media.martyr.shop/monk/glb/False_Awakening.usdz"
@@ -62,25 +62,25 @@
       isInteractive ? disableDragSlider(slider) : enableDragSlider(slider)
     });
 
-    let observer
+    // let observer
 
-    customElements.whenDefined('monk-view').then(() => {
-      observer = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-          if (entry.isIntersecting) {
-            monkView.attemptInit();
-          } else {
-            monkView.abortInit();
-          }
-        });
-      }, { threshold: 0.5 });
+    // customElements.whenDefined('monk-view').then(() => {
+    //   observer = new IntersectionObserver((entries) => {
+    //     entries.forEach(entry => {
+    //       if (entry.isIntersecting) {
+    //         monkView.attemptInit();
+    //       } else {
+    //         monkView.abortInit();
+    //       }
+    //     });
+    //   }, { threshold: 0.5 });
 
-      observer.observe(monkView);
-    });
+    //   observer.observe(monkView);
+    // });
 
     monkView.addEventListener('loaded', (e) => {
       document.querySelector('.loading-monk-view').textContent = 'LOADED';
-      if (observer) observer.disconnect();
+      // if (observer) observer.disconnect();
     });
 
   </script>
