@@ -24,8 +24,9 @@ class ThreeSceneManager {
 		this.baseLoadPixelRatio = data.pixelRatio ?? window.devicePixelRatio
 		this.initialRenderPixelRatio = this.lowPerformanceSettings.lowResolution ? data.pixelRatio / 2 : this.baseLoadPixelRatio
 		this.performantRenderPixelRatio = null
-		this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 4;
+		// this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 4;
 		// this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 0;
+		this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 2;
 
 		this.pixelRatioVariation = 1 // this to handle screen DPI changes
 
@@ -99,9 +100,16 @@ class ThreeSceneManager {
 		this.throttleInteractiveToggle = 150
 		
 		this.e_interactivityChange = data.e_interactivityChange || (() => {})
+		this.e_ready = data.e_ready || (() => {})
 		this.e_loaded = data.e_loaded || (() => {})
 
 		this.clock = new THREE.Clock()
+
+		this.startupMode = data.startup || "auto";
+		this.isReady = false; // Assets loaded?
+		this.shouldStart = this.startupMode === "auto"; // Should start rendering? By default yes
+		this.hasStarted = false; // Has rendering started?
+
 		this.hasAborted = false
 		this.initScene()
 	}
@@ -119,13 +127,29 @@ class ThreeSceneManager {
 
 		Promise.all([this.setupPostProcessing(), this.loadAssets()])
 			.then(() => {
-				this.startPerformanceSamplingLoop();
-				// this.startRenderLoop()
+				this.isReady = true;
+				this.e_ready(true);
+				if ((this.startupMode === "auto") || (this.shouldStart && !this.hasStarted)) {
+					this.startPerformanceSamplingLoop();
+					this.hasStarted = true;
+				}
 			})
 			.catch((error) => {
-				this.abortLoading(error)
-			})
+				this.abortLoading(error);
+			});
 	}
+
+	enableRendering() {
+		this.shouldStart = true;
+		if (this.isReady && !this.hasStarted) {
+		  this.startPerformanceSamplingLoop();
+		  this.hasStarted = true;
+		}
+	 }
+  
+	 disableRendering() {
+		this.shouldStart = false;
+	 }
 
 	setupRenderer() {
 		this.renderer = new THREE.WebGLRenderer({
@@ -141,7 +165,7 @@ class ThreeSceneManager {
 	}
 
 	setupCamera() {
-		this.camera = new THREE.PerspectiveCamera(50, 2, 0.1, 100)
+		this.camera = new THREE.PerspectiveCamera(50, 2, 0.03, 100)
 		console.log(this.baseCameraSettings.multiplier)
 		this.camera.position.z = this.baseCameraSettings.targetDistance * this.baseCameraSettings.multiplier
 		// this.camera.rotation.y = Math.PI * 0.5;
@@ -495,7 +519,7 @@ class ThreeSceneManager {
 			// }
 
 			// Adjust render resolution
-			if (fps < 50) {
+			if (fps < 54) {
 				const targetFPS = 75
 				const fpsRatio = Math.min(fps / targetFPS, 1)
 				const potentialPixelRatio = Math.sqrt(this.initialRenderPixelRatio ** 2.0 * fpsRatio)
@@ -526,11 +550,9 @@ class ThreeSceneManager {
 				isMeasuring = true
 				frameCount = 0
 			}
-
-			// Count frames during measurement
+			
 			frameCount++
-
-			// Final calculation
+			
 			const elapsed = this.clock.getElapsedTime() - stabilizationTime
 			if (elapsed >= measureDuration) {
 				const actualFPS = frameCount / elapsed

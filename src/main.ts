@@ -227,6 +227,7 @@ class MonkView extends HTMLElement {
     maxDistance: number;
     initDelay: number;
     initDelayInteractive: number;
+    startup: string;
     lowPerformanceSettings: ReturnType<typeof getLowPerformanceSettings>;
     perfSampling: {
       stabilityDuration: number;
@@ -235,6 +236,9 @@ class MonkView extends HTMLElement {
   };
   public isInteractive: boolean = false;
   private limitPixelRatio: number = /Android/i.test(navigator.userAgent) ? 2.0 : Infinity;
+  private sceneManager: any = null;
+  private worker: Worker | null = null;
+  // private canInitialize: boolean = false;
 
   constructor() {
     super();
@@ -252,6 +256,7 @@ class MonkView extends HTMLElement {
       stabilityDuration: parseFloat(this.getAttribute("perf-stability-duration") || "1.0"),
       measureDuration: parseFloat(this.getAttribute("perf-measure-duration") || "0.5")
     }
+    const startup = this.getAttribute("startup") || "auto";
 
     this.commonOptions = {
       pixelRatio: getPixelRatio(this.limitPixelRatio),
@@ -262,6 +267,7 @@ class MonkView extends HTMLElement {
       maxDistance,
       initDelay,
       initDelayInteractive,
+      startup,
       lowPerformanceSettings: getLowPerformanceSettings(),
       perfSampling
     };
@@ -335,10 +341,15 @@ class MonkView extends HTMLElement {
     this.dispatchEvent(new CustomEvent('loaded', { detail: { state } }));
   }
 
+  private handleOnReady(state: boolean) {
+    this.setAttribute('ready', 'true')
+    this.dispatchEvent(new CustomEvent('ready', { detail: { state } }));
+  }
 
   startWorker(canvas: HTMLCanvasElement): void {
     const offscreen = canvas.transferControlToOffscreen();
     const worker = new OffscreenCanvasWorker();
+    this.worker = worker;
 
     const handlers = createEventHandlers(this);
     const proxy = new ElementProxy(canvas, worker, handlers, this.limitPixelRatio);
@@ -358,8 +369,29 @@ class MonkView extends HTMLElement {
         case 'loaded':
           this.handleOnLoaded(e.data.state);
           break
+        case 'ready':
+          this.handleOnReady(e.data.state);
+          break
       }
     };
+  }
+
+  attemptInit(): void {
+    // this.canInitialize = true;
+    if (this.worker) {
+      this.worker.postMessage({ type: "enableRendering" });
+    } else if (this.sceneManager) {
+      this.sceneManager.enableRendering();
+    }
+  }
+
+  abortInit(): void {
+    // this.canInitialize = false;
+    if (this.worker) {
+      this.worker.postMessage({ type: "disableRendering" });
+    } else if (this.sceneManager) {
+      this.sceneManager.disableRendering();
+    }
   }
 
   initScene(): void {
@@ -370,14 +402,17 @@ class MonkView extends HTMLElement {
       return;
     }
 
-    this.canvas.transferControlToOffscreen !== undefined 
+    const useOffscreenCanvas = this.getAttribute("offscreencanvas") === "true"
+
+    this.canvas.transferControlToOffscreen !== undefined && useOffscreenCanvas
       ? this.startWorker(this.canvas)
-      : init({ 
+      : this.sceneManager = init({ 
         canvas: this.canvas, 
         inputElement: this.canvas, 
         ...this.commonOptions,
         e_interactivityChange: (state: boolean) => this.handleInteractivityChange(state),
-        e_loaded: (state: boolean) => this.handleOnLoaded(state)
+        e_loaded: (state: boolean) => this.handleOnLoaded(state),
+        e_ready: (state: boolean) => this.handleOnReady(state)
       });
   }
 

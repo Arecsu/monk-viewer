@@ -27,6 +27,13 @@ Let's grab three.js and see what we can do.
 
 Additional contribution to @monogrid/gainmap-js which made it compatible with web workers ♥
 
+## Known issues
+
+- Chrome precise FPS measurement is just pain. It is not possible. So the best way to make sure every device will run as smooth as they can is to lower graphics features across as much devices as possible. My current implementation disables MSAA for Chrome on Android, leaving it only mostly for iOS devices and desktop systems (only at x2 MSAA, which is enough if the resolution is high enough)
+- Same as this, Firefox on Mac and Android works horrible with MSAA, high resolution and offscreen canvas. MSAA is disabled and pixel ratio is lowered.
+- Normal canvas - non offscreen - have not implemented disabling scroll interaction (e.preventDefault() on touchmove) when the object is non interactive with OrbitControls. Offscreen canvas does it and works great though.
+- Effects like SMAA in `postprocessing` won't work in offscreen canvas mode because they depend on browser features like Image Decoding which are only available in javascript's main thread. Considering porting the effect to work on a web worker somehow.
+
 ## Using it
 
 ### Method 1: Build
@@ -53,28 +60,43 @@ In your HTML document
 
 And serve `offscreencanvas-worker-1.0.0.js` and `renderer-1.0.0.js` from the same path as `monk-viewer-1.0.0.js` for them to be imported by `monk-viewer-1.0.0.js` correctly.
 
-The HTML component:
+### The HTML component:
 
 ```html
 <monk-view 
-   id="viewer"
-   model="False_Enlightenment.glb"
-   min-distance="0.4"
-   target-distance="0.8"
-   max-distance="2.0"
-   perf-stability-duration="1.0"
-   perf-measure-duration="0.5"
-   init-delay="0"
-   init-delay-interactive="0.6"
-   model-title="False Enlightenment"
-   model-glb="False_Enlightenment.glb"
-   model-usdz="False_Enlightenment.usdz"
-   ar-vertical="true"
-   envmap="old_bus_depot_2k_HDR.jpg">
+  id="viewer"
+  model="False_Enlightenment.glb"
+  startup="auto"
+  min-distance="0.4"
+  target-distance="0.8"
+  max-distance="2.0"
+  perf-stability-duration="1.0"
+  perf-measure-duration="0.5"
+  init-delay="0"
+  init-delay-interactive="0.6"
+  offscreencanvas="true"
+  model-title="False Enlightenment"
+  model-glb="False_Enlightenment.glb"
+  model-usdz="False_Enlightenment.usdz"
+  ar-vertical="true"
+  envmap="old_bus_depot_2k_HDR.jpg">
 </monk-view>
 ```
 
-CSS:
+- `startup`: 'auto' or 'manual'. 'auto' means the renderer and scene will start as soon as assets are loaded. With 'manual' you have to `attemptInit()` at some point. The models and assets will preload in both scenarios.
+
+- `offscreencanvas`: 'true' or 'false'. Recommended to leave it enabled. Will fallback to a normal canvas if for some reason it can't use offscreen canvas. No reason to not use it, 
+unless researching purposes? Although what's being mentioned on Known Issues might be semi-valid concerns.
+
+There are also attributes that will be set across the element's lifespan:
+
+- `ready`: 'true' or null. Appears when the assets have been loaded and ready to be rendered.
+
+- `loaded`: 'true' or null. Appears when the renderer and scene have been executed.
+
+- `interactive`: 'true', 'false' or null. Triggered when clicked on the element to interact with it.
+
+### CSS:
 
 ```css
 monk-view,
@@ -123,20 +145,55 @@ monk-view[loaded="true"] .ar-link {
 }
 ```
 
+### Events
+
 There's the events you can make usage of:
 
 ```javascript
 const monkView = document.getElementById('viewer');
 
-monkView.addEventListener('interactivity', (e) => {
+monkView.addEventListener('interactivity', (e) => { // triggers false or true depending on interactivity changes
    const isInteractive = e.detail.state; // true or false
    isInteractive ? disableDragSlider(slider) : enableDragSlider(slider)
 });
 
-monkView.addEventListener('loaded', (e) => {
+monkView.addEventListener('loaded', (e) => { // triggers when the renderer and scene have been executed
    document.querySelector('.loading-monk-view').textContent = 'LOADED'
 })
 ```  
+
+In case of using `startup="manual"`:
+
+```javascript
+    let observer
+    const monkView = document.getElementById('viewer');
+
+    customElements.whenDefined('monk-view').then(() => {
+      observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+
+            // If assets are loaded, renderer will start.
+            // If not, will do it as soon as assets are ready
+            monkView.attemptInit();
+
+          } else {
+
+            // If the renderer has not yet started, will prevent it to execute. 
+            // Won't stop execution of an already executed renderer
+            monkView.abortInit(); 
+
+          }
+        });
+      }, { threshold: 0.5 });
+
+      observer.observe(monkView);
+    });
+
+    monkView.addEventListener('loaded', (e) => {
+      if (observer) observer.disconnect();
+    });
+```
 
 ## Method 2: custom project
 

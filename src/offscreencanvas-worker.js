@@ -58,6 +58,10 @@ class ElementProxyReceiver extends EventDispatcher {
 		self.postMessage({ type: "loaded", id: this.id, state })
 	}
 
+	m_ready(state) {
+		self.postMessage({ type: "ready", id: this.id, state })
+	}
+
 	focus() {
 		// no-op
 	}
@@ -83,11 +87,13 @@ class ProxyManager {
 
 const proxyManager = new ProxyManager()
 
+let sceneManager;
+
 function start(data) {
 	const proxy = proxyManager.getProxy(data.canvasId)
 	proxy.ownerDocument = proxy 	// HACK!
 	self.document = {} 				// HACK!
-	init({
+	sceneManager = init({
 		canvas: data.canvas,
 		inputElement: proxy,
 		pixelRatio: data.pixelRatio,
@@ -97,11 +103,13 @@ function start(data) {
 		targetDistance: data.targetDistance,
 		maxDistance: data.maxDistance,
 		initDelay: data.initDelay,
+		startup: data.startup,
 		initDelayInteractive: data.initDelayInteractive,
 		lowPerformanceSettings: data.lowPerformanceSettings,
 		perfSampling: data.perfSampling,
 		e_interactivityChange: (state) => proxy.m_interactivity(state),
-		e_loaded: (state) => proxy.m_loaded(state)
+		e_loaded: (state) => proxy.m_loaded(state),
+		e_ready: (state) => proxy.m_ready(state)
 	})
 }
 
@@ -113,6 +121,8 @@ const handlers = {
 	start,
 	makeProxy,
 	event: proxyManager.handleEvent,
+	enableRendering: () => sceneManager.enableRendering(),
+	disableRendering: () => sceneManager.disableRendering(),
 }
 
 self.onmessage = function (e) {
@@ -120,6 +130,5 @@ self.onmessage = function (e) {
 	if (typeof fn !== "function") {
 		throw new Error("no handler for type: " + e.data.type)
 	}
-
 	fn(e.data)
 }

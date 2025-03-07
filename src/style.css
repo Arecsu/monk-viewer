@@ -122,8 +122,8 @@ monk-view canvas:focus {
 }
 
 monk-view {
-  --delay-model: 660ms;
-  --delay-ar: 3000ms;
+  --delay-model: 300ms;
+  --delay-ar: calc(--delay-model + 2300ms);
   position: relative;
 }
 
@@ -143,7 +143,7 @@ monk-view[loaded="true"] canvas {
   pointer-events: none;
 }
 
-.loading-monk-view:has(+ monk-view[loaded="true"]) {
+.loading-monk-view:has(+ monk-view[ready="true"]) {
   opacity: 0;
 }
 

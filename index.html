@@ -21,10 +21,12 @@
         min-distance="0.4"
         target-distance="0.8"
         max-distance="2.0"
-        perf-stability-duration="1.0"
-        perf-measure-duration="0.5"
+        perf-stability-duration="0"
+        perf-measure-duration="0.4"
         init-delay="0"
-        init-delay-interactive="0.6"
+        init-delay-interactive="1.0"
+        offscreencanvas="true"
+        startup="auto"
         model-title="False Enlightenment"
         model-glb="False_Enlightenment.glb"
         model-usdz="False_Enlightenment.usdz"
@@ -59,9 +61,26 @@
       isInteractive ? disableDragSlider(slider) : enableDragSlider(slider)
     });
 
+    // let observer
+
+    // customElements.whenDefined('monk-view').then(() => {
+    //   observer = new IntersectionObserver((entries) => {
+    //     entries.forEach(entry => {
+    //       if (entry.isIntersecting) {
+    //         monkView.attemptInit();
+    //       } else {
+    //         monkView.abortInit();
+    //       }
+    //     });
+    //   }, { threshold: 0.5 });
+
+    //   observer.observe(monkView);
+    // });
+
     monkView.addEventListener('loaded', (e) => {
-      document.querySelector('.loading-monk-view').textContent = 'LOADED'
-    })
+      document.querySelector('.loading-monk-view').textContent = 'LOADED';
+      // if (observer) observer.disconnect();
+    });
 
   </script>
   <script type="module" src="/src/main.ts"></script>
