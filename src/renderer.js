@@ -259,9 +259,6 @@ class ThreeSceneManager {
 	}
 
 	handleInputStart(event) {
-		// Prevent default for touch events and when it is intereactive to avoid scrolling
-		if (event.type === "touchstart" && this.isInteractive) event.preventDefault()
-
 		let pos
 		let isTouchOrLeftClick = false
 
@@ -347,7 +344,7 @@ class ThreeSceneManager {
 		} else {
 			// Exiting interactive mode: partial deceleration
 			this.controls.enabled = false;
-
+			console.log(getComputedStyle(this.inputElement).touchAction)
 			if (this.returnModelAnimation.isActive) {
 				// Start deceleration to 20% towards initial from current position
 				this.decelerationAnimation.startQuaternion = this.model.quaternion.clone();

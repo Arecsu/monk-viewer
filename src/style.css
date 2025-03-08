@@ -125,6 +125,11 @@ monk-view {
   --delay-model: 300ms;
   --delay-ar: calc(--delay-model + 2300ms);
   position: relative;
+  touch-action: auto;
+}
+
+monk-view[interactive="true"] {
+  touch-action: none;
 }
 
 monk-view canvas {
