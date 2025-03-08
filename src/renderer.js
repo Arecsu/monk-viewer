@@ -253,14 +253,14 @@ class ThreeSceneManager {
 		this.inputElement.addEventListener("mouseup", this.handleInputEnd.bind(this))
 
 		// Touch events
-		this.inputElement.addEventListener("touchstart", this.handleInputStart.bind(this), { passive: false })
+		this.inputElement.addEventListener("touchstart", this.handleInputStart.bind(this))
 		this.inputElement.addEventListener("touchmove", this.handleInputMove.bind(this))
 		this.inputElement.addEventListener("touchend", this.handleInputEnd.bind(this))
 	}
 
 	handleInputStart(event) {
-		// Prevent default for touch events to avoid scrolling
-		if (event.type === "touchstart") event.preventDefault()
+		// Prevent default for touch events and when it is intereactive to avoid scrolling
+		if (event.type === "touchstart" && this.isInteractive) event.preventDefault()
 
 		let pos
 		let isTouchOrLeftClick = false

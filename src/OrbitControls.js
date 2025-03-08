@@ -283,7 +283,7 @@ class OrbitControls extends Controls {
 		const document = this.domElement.getRootNode(); // offscreen canvas compatibility
 		document.removeEventListener( 'keydown', this._interceptControlDown, { capture: true } );
 
-		this.domElement.style.touchAction = 'auto';
+		// this.domElement.style.touchAction = 'auto';
 
 	}
 

@@ -31,7 +31,6 @@ Additional contribution to @monogrid/gainmap-js which made it compatible with we
 
 - Chrome precise FPS measurement is just pain. It is not possible. So the best way to make sure every device will run as smooth as they can is to lower graphics features across as much devices as possible. My current implementation disables MSAA for Chrome on Android, leaving it only mostly for iOS devices and desktop systems (only at x2 MSAA, which is enough if the resolution is high enough)
 - Same as this, Firefox on Mac and Android works horrible with MSAA, high resolution and offscreen canvas. MSAA is disabled and pixel ratio is lowered.
-- Normal canvas - non offscreen - have not implemented disabling scroll interaction (e.preventDefault() on touchmove) when the object is not interactive with OrbitControls. So you basically can't scroll a webpage if you're trying to do it from the canvas. With offscreen canvas you can do it though.
 - Effects like SMAA in `postprocessing` won't work in offscreen canvas mode because they depend on browser features like Image Decoding which are only available in javascript's main thread. Considering porting the effect to work on a web worker somehow.
 
 ## Using it
