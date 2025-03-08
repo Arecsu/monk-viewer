@@ -198,22 +198,6 @@ const createEventHandlers = (monkView: MonkView) => {
   };
 };
 
-function getLowPerformanceSettings() {
-  const isFirefoxMacintosh = /Macintosh(?!.*KHTML).*Gecko/i.test(navigator.userAgent);
-  const isFirefoxAndroid = /Android(?!.*KHTML).*Gecko/i.test(navigator.userAgent);
-  const isAndroid = /Android/i.test(navigator.userAgent);
-
-  if (isFirefoxMacintosh || isFirefoxAndroid) {
-    return { disableAA: true, lowResolution: true };
-  }
-
-  if (isAndroid) {
-    return { disableAA: true, lowResolution: false };
-  }
-
-  return { disableAA: false, lowResolution: false };
-}
-
 // main();
 
 class MonkView extends HTMLElement {
@@ -228,7 +212,7 @@ class MonkView extends HTMLElement {
     initDelay: number;
     initDelayInteractive: number;
     startup: string;
-    lowPerformanceSettings: ReturnType<typeof getLowPerformanceSettings>;
+    lowPerformanceSettings: ReturnType<MonkView["getLowPerformanceSettings"]>;
     perfSampling: {
       stabilityDuration: number;
       measureDuration: number;
@@ -239,11 +223,13 @@ class MonkView extends HTMLElement {
   private sceneManager: any = null;
   private worker: Worker | null = null;
   private proxy: ElementProxy | null = null;
+  private useOffscreenCanvas: boolean = false;
   // private canInitialize: boolean = false; // unused
 
   constructor() {
     super();
     this.canvas = document.createElement("canvas");
+    this.useOffscreenCanvas = this.getAttribute("offscreencanvas") === "true"
 
     // Extract attributes once and build the options object.
     const modelUrl = this.isValidURL(this.getAttribute("model") || "");
@@ -269,7 +255,7 @@ class MonkView extends HTMLElement {
       initDelay,
       initDelayInteractive,
       startup,
-      lowPerformanceSettings: getLowPerformanceSettings(),
+      lowPerformanceSettings: this.getLowPerformanceSettings(),
       perfSampling
     };
   }
@@ -345,6 +331,21 @@ class MonkView extends HTMLElement {
   private handleOnReady(state: boolean) {
     this.setAttribute('ready', 'true')
     this.dispatchEvent(new CustomEvent('ready', { detail: { state } }));
+  }
+
+  private getLowPerformanceSettings() {
+    const userAgent = navigator.userAgent;
+    const isFirefoxMacOrAndroid = /(Macintosh|Android)(?!.*KHTML).*Gecko/i.test(userAgent);
+    const isAndroid = /Android/i.test(userAgent);
+  
+    if (isFirefoxMacOrAndroid && this.useOffscreenCanvas) {
+      return { disableAA: true, lowResolution: true };
+    }
+    if (isAndroid || isFirefoxMacOrAndroid) {
+      return { disableAA: true, lowResolution: false };
+    }
+  
+    return { disableAA: false, lowResolution: false };
   }
 
   startWorker(canvas: HTMLCanvasElement): void {
@@ -432,9 +433,7 @@ class MonkView extends HTMLElement {
       return;
     }
 
-    const useOffscreenCanvas = this.getAttribute("offscreencanvas") === "true"
-
-    this.canvas.transferControlToOffscreen !== undefined && useOffscreenCanvas
+    this.canvas.transferControlToOffscreen !== undefined && this.useOffscreenCanvas
       ? this.startWorker(this.canvas)
       : this.sceneManager = init({ 
         canvas: this.canvas, 
