@@ -13,7 +13,7 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 	renderer.setPixelRatio(pixelRatio || 1)
 	renderer.outputColorSpace = THREE.SRGBColorSpace;
 	renderer.toneMapping = THREE.NoToneMapping;
-	renderer.toneMappingExposure = 1.5;
+	renderer.toneMappingExposure = 1.0;
 	// renderer.toneMapping = THREE.ReinhardToneMapping;
 	// renderer.toneMapping = THREE.ReinhardToneMapping;
 	// renderer.toneMappingExposure = 1.5;
@@ -22,12 +22,15 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 	// renderer.toneMapping = THREE.AgXToneMapping;
 	// renderer.toneMapping = THREE.ACESFilmicToneMapping;
 
-	const fov = 50;
+	const fov = 80;
 	const aspect = 2; // the canvas default
 	const near = 0.1;
 	const far = 100;
 	const camera = new THREE.PerspectiveCamera( fov, aspect, near, far );
+	// camera.fov = 50;
 	camera.position.z = 0.8;
+	camera.position.x = 0.0;
+	camera.position.y = 0.0;
 
 	const controls = new OrbitControls( camera, inputElement );
    controls.enableDamping = true;
@@ -42,8 +45,8 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 	const color = 0xFFFFFF;
 	const intensity = 1;
 	const light = new THREE.DirectionalLight( color, intensity );
-	light.position.set( - 10, 5, 40 );
-	// scene.add( light );
+	light.position.set( - 10, -50, -30 );
+	scene.add( light );
 
 
 	let mixer
@@ -86,7 +89,7 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 			const action = mixer.clipAction( gltf.animations[ 0 ] );
 			action.play();
 
-			scene.add( model );
+			// scene.add( model );
 			requestAnimationFrame( render );
 
 		})
@@ -107,6 +110,7 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 			//  scene.background.mapping = THREE.EquirectangularReflectionMapping;
 			 scene.environment = hdrTexture;
 			 scene.environment.mapping = THREE.EquirectangularReflectionMapping;
+			scene.environmentIntensity = 0.08
   
 			 // Don't forget to dispose of the HDR renderer when you're done
 			 hdri.dispose();
@@ -173,7 +177,7 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 
 	const bloomPass = new EffectPass(
 		camera,
-		bloomEffect,
+		// bloomEffect,
 	); 
 
 	bloomPass.dithering = true
@@ -184,14 +188,14 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
 	composer.addPass(new EffectPass(
 		camera,
 		// hueSaturationEffect,
-		toneMappingEffect,
-		brightnessContrastEffect,
+		// toneMappingEffect,
+		// brightnessContrastEffect,
 	));
 
 
-	const boxWidth = 1;
-	const boxHeight = 1;
-	const boxDepth = 1;
+	const boxWidth = 1.5;
+	const boxHeight = 1.5;
+	const boxDepth = 1.5;
 	const geometry = new THREE.BoxGeometry( boxWidth, boxHeight, boxDepth );
 
 	function makeInstance( geometry, color, position) {
@@ -220,24 +224,32 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
       () => makeInstance(geometry, 0x44aa88, getRandomPosition()),
       () => makeInstance(geometry, 0x8844aa, getRandomPosition()),
       () => makeInstance(geometry, 0xaa8844, getRandomPosition()),
+      // () => makeInstance(geometry, 0x999999, getRandomPosition()),
+      // () => makeInstance(geometry, 0xaaaaaa, getRandomPosition()),
+      // () => makeInstance(geometry, 0x666666, getRandomPosition()),
   ];
   
-  // Helper function to generate random positions
-  function getRandomPosition() {
-   const min = -30;
-   const max = 30;
-   return {
-       x: Math.random() * (max - min) + min,
-       y: Math.random() * (max - min) + min,
-       z: Math.random() * (max - min) * 1 + min - 40
-   };
+
+function getRandomPosition() {
+	const min = -50;
+	const max = 50;
+	const exclusionRadius = 15;
+
+	let x, y, z;
+
+	do {
+		 x = Math.random() * (max - min) + min;
+		 y = Math.random() * (max - min) + min;
+		 z = Math.random() * (max - min) + min;
+	} while (Math.sqrt(x * x + y * y + z * z) < exclusionRadius);
+
+	return { x, y, z };
 }
   
    
    // Number of times to duplicate
-   const timesToDuplicate = 100;
+   const timesToDuplicate = 1800;
    
-	/*
    // Create the cubes array by executing makeInstance for eac copy
    const cubes = [];
    for (let i = 0; i < timesToDuplicate; i++) {
@@ -245,7 +257,6 @@ export function init( data ) { /* eslint-disable-line no-unused-vars */
             cubes.push(instance()); // Call each function in cubes1
          }
    }
-			*/
    
 
 	class PickHelper {
@@ -313,7 +324,6 @@ function resizeRendererToDisplaySize(renderer) {
 
 		}
 
-		/*
 		cubes.forEach( ( cube, ndx ) => {
 
 			const speed = 1 + ndx * .0001;
@@ -322,7 +332,6 @@ function resizeRendererToDisplaySize(renderer) {
 			cube.rotation.y = rot;
 
 		} );
-		 */
 		// https://raw.githubusercontent.com/Arecsu/model-viewer/monk/packages/shared-assets/environments/old_bus_depot_2k_HDR.jpg
 		// pickHelper.pick( pickPosition, scene, camera, time );
 		
