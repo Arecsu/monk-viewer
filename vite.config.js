@@ -14,7 +14,7 @@ const manualChunks = {
 };
 
 export default defineConfig({
-  base: '/monk-viewer/', 
+  base: '/', 
   build: {
     rollupOptions: {
       input: {
