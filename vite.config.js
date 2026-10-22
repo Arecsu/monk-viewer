@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import path from "path";
-import { version } from "./package.json"; // Import your version
+import pkg from "./package.json" with { type: "json" };
+const { version } = pkg; // Import your version
 
 const manualChunks = {
   manualChunks(id) {
@@ -56,7 +57,7 @@ export default defineConfig({
     modulePreload: false, // Avoids document references
     rollupOptions: {
       input: {
-        main: path.resolve(__dirname, "index.html"),
+        main: path.resolve(import.meta.dirname, "index.html"),
       },
       output: {
         entryFileNames: (chunkInfo) => {

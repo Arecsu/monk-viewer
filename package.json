@@ -10,15 +10,15 @@
     "deploy": "tsc && vite build && gh-pages --dotfiles --nojekyll -d dist"
   },
   "devDependencies": {
+    "@types/three": "^0.186.0",
     "gh-pages": "^6.3.0",
-    "typescript": "~5.7.3",
-    "vite": "^6.1.0"
+    "typescript": "~7.0.2",
+    "vite": "^8.3.5"
   },
   "dependencies": {
-    "@monogrid/gainmap-js": "3.1.0",
-    "@types/three": "^0.170.0",
+    "@monogrid/gainmap-js": "3.7.2",
     "js-easing-functions": "^1.0.3",
-    "postprocessing": "7.0.0-beta.6",
-    "three": "^0.173.0"
+    "postprocessing": "7.0.0-beta.16",
+    "three": "^0.186.1"
   }
 }
