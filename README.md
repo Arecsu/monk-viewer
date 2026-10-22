@@ -16,7 +16,7 @@ Let's grab three.js and see what we can do.
 - **Total Three.js Control:** Full access to the rendering pipeline — custom shaders, post-processing, etc.
 - **Ultra HDR Environment Maps:** Loads Adobe Gain Map JPGs, courtesy of [MONOGRID gainmap-js](https://github.com/MONOGRID/gainmap-js)
 - **Smooth 3D Interaction:** Custom orbit controls with damping, auto-rotation, and slick transitions. Everything is smooth: camera interaction, model rotation, enabling/disabling interactions, interrumpting rotations or movement.
-- **Custom Specular Antialiasing Shader Injection:** Developed to reduce jagged lines at grazing angles. This is due to having an [HDR pipeline](https://mynameismjp.wordpress.com/2012/10/24/msaa-overview/) with a high-contrast scene, which renders traditional anti-aliasing solutions ineffective at identifying and smoothing aliased lines. This custom implementation is injected into Three's PBR Standard Material, monkey-patching radiance calculations to reduce the brightness of these lines at grazing angles.
+- **Tonemapped MSAA Resolve:** With an [HDR pipeline](https://mynameismjp.wordpress.com/2012/10/24/msaa-overview/) and a high-contrast scene, hardware MSAA averages samples in linear HDR, so a half-covered pixel of a bright edge still tonemaps to pure white and edges stay jagged no matter the sample count. Opaque materials write a Reinhard-encoded colour matching the final tone mapping, the hardware resolve averages what ends up on screen, and `TonemappedResolvePass` decodes back to linear HDR before bloom and tone mapping. Transparent objects (the glass) are drawn after the decode, since blending doesn't commute with the encoding. Combined with 4x MSAA, thin bright edges come out close to 16x supersampling.
 - **Startup Transition:** smooth animations = ♥ UX
 - **Augmented Reality (AR):** Auto-detects AR support on iOS/Android and adds a quick link to jump in, loading optimized GLB or USDZ files.
 - **USDZ** files should use the latest Apple schemas, converted from GLB using Reality Converter in MacOS. Ambient Occlusion maps work!
@@ -29,7 +29,7 @@ Additional contribution to @monogrid/gainmap-js which made it compatible with we
 
 ## Known issues
 
-- Chrome precise FPS measurement is just pain. It is not possible. So the best way to make sure every device will run as smooth as they can is to lower graphics features across as much devices as possible. My current implementation disables MSAA for Chrome on Android, leaving it only mostly for iOS devices and desktop systems (only at x2 MSAA, which is enough if the resolution is high enough)
+- Chrome precise FPS measurement is just pain. It is not possible. So the best way to make sure every device will run as smooth as they can is to lower graphics features across as much devices as possible. My current implementation disables MSAA for Chrome on Android, leaving it only mostly for iOS devices and desktop systems (at x4 MSAA, see Tonemapped MSAA Resolve above)
 - Same as this, Firefox on Mac and Android works horrible with MSAA, high resolution and offscreen canvas. MSAA is disabled and pixel ratio is lowered.
 - Effects like SMAA in `postprocessing` won't work in offscreen canvas mode because they depend on browser features like Image Decoding which are only available in javascript's main thread. Considering porting the effect to work on a web worker somehow.
 

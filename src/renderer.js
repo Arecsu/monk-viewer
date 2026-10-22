@@ -3,8 +3,8 @@ import { OrbitControls } from "./OrbitControls.js"
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js"
 import { HDRJPGLoader } from "@monogrid/gainmap-js"
 import { DitheringEffect } from "./postprocessing/DitheringEffect.js"
-import envmapSpecularAntialias from "./shaders/envmap_physical_pars_fragment_specular_antialias.glsl?raw"
-import lightsFragmentMapsSpecularAntialias from "./shaders/lights_fragment_maps_specular_antialias.glsl?raw"
+import { TonemappedResolvePass } from "./postprocessing/TonemappedResolvePass.js"
+import { TemporalAAPass } from "./postprocessing/TemporalAAPass.js"
 import { BloomEffect, RenderPipeline, ClearPass, GeometryPass, EffectPass, ToneMappingEffect, ToneMapping } from "postprocessing"
 // import HDRIMAP from "./envmaps/old_bus_depot_4k_blur.jpg?url"
 import { easeOutQuart, easeInCubic, easeOutCubic } from "js-easing-functions"
@@ -26,7 +26,11 @@ class ThreeSceneManager {
 		this.performantRenderPixelRatio = null
 		// this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 4;
 		// this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 0;
-		this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 2;
+		// 4 samples: thin bright edges (e.g. the 2.4mm frame sides) slip between the 2 sample rows of 2x MSAA
+		this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 4;
+		// Tonemapped resolve only pays off with MSAA
+		this.resolvePass = null
+		this.taa = null
 
 		this.pixelRatioVariation = 1 // this to handle screen DPI changes
 
@@ -198,7 +202,12 @@ class ThreeSceneManager {
 	setupPostProcessing() {
 		return new Promise((resolve, reject) => {
 			this.pipeline = new RenderPipeline(this.renderer)
-			this.pipeline.add(new ClearPass())
+			// Smooths what MSAA quantizes into steps, e.g. sub-pixel edges sliding across pixel rows
+			this.taa = new TemporalAAPass({ exposure: this.renderer.toneMappingExposure })
+			this.taa.trackedObject = this.model
+			this.pipeline.add(this.taa.jitterPass)
+			const clearPass = new ClearPass()
+			this.pipeline.add(clearPass)
 			this.pipeline.add(
 				new GeometryPass(this.scene, this.camera, {
 					frameBufferType: THREE.HalfFloatType,
@@ -206,6 +215,13 @@ class ThreeSceneManager {
 					samples: this.msaaSamples,
 				})
 			)
+			if (this.msaaSamples > 0) {
+				// Resolve MSAA in tonemapped space so bright HDR edges get antialiased
+				this.resolvePass = new TonemappedResolvePass({ exposure: this.renderer.toneMappingExposure })
+				clearPass.clearValues.color = this.resolvePass.encodeColor(this.scene.background)
+				this.pipeline.add(this.resolvePass)
+			}
+			this.pipeline.add(this.taa)
 			const effects = new EffectPass(
 				// new SMAAEffect(),
 				// new FXAAEffect({
@@ -405,21 +421,11 @@ class ThreeSceneManager {
 				this.model.traverse((child) => {
 					if (child.material) {
 						child.material.needsUpdate = true
-						child.material.onBeforeCompile = (shader) => {
-							// shader.vertexShader = ModShader2;
-							// shader.fragmentShader = ModShader;
-							shader.fragmentShader = shader.fragmentShader
-								.replace(
-									"#include <envmap_physical_pars_fragment>",
-									envmapSpecularAntialias
-								)
-								.replace(
-									"#include <lights_fragment_maps>",
-									lightsFragmentMapsSpecularAntialias
-								)
-						};
 					}
 				});
+				// Before scene.add(), so the GeometryPass shader plugin wraps the encoding hook
+				this.resolvePass?.prepare(this.model)
+				if (this.taa) this.taa.trackedObject = this.model
 
 					this.optimizeModelTextures(this.model)
 
