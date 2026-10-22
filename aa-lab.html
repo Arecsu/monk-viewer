@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AA lab</title>
+  <style>
+    html, body { margin: 0; background: #000; }
+    canvas { width: 900px; height: 600px; display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="state" style="position: fixed; left: 12px; bottom: 12px; color: #0f0; font: 14px monospace;"></div>
+  <script type="module">
+    import { init } from "/src/renderer.js"
+    import * as THREE from "three"
+    window.THREE = THREE
+
+    // ?mode=tmr4 (TAA off) | taa (default); ?live=1 keeps the normal render loop, T toggles TAA
+    const params = new URLSearchParams(location.search)
+    const mode = params.get("mode") ?? "taa"
+    const live = params.get("live") === "1"
+    window.mode = mode
+
+    const canvas = document.getElementById("c")
+    window.mgr = init({
+      canvas,
+      inputElement: canvas,
+      pixelRatio: live ? window.devicePixelRatio : 1,
+      modelUrl: "/monk-viewer/False_Enlightenment.glb",
+      envmapUrl: "https://raw.githubusercontent.com/Arecsu/model-viewer/monk/packages/shared-assets/environments/old_bus_depot_2k_HDR.jpg",
+      targetDistance: 0.8,
+      minDistance: 0.4,
+      maxDistance: 2.0,
+      initDelay: 0,
+      initDelayInteractive: 0,
+      startup: "auto",
+      lowPerformanceSettings: { disableAA: false, lowResolution: false },
+      perfSampling: { stabilityDuration: 0, measureDuration: 0.1 },
+      e_loaded: () => {
+        if (mode !== "taa") window.mgr.taa.enabled = false
+        window.loaded = true
+        if (live) {
+          showState()
+          // After the perf sampling window, which may lower the resolution
+          setTimeout(() => { window.mgr.performantRenderPixelRatio = window.devicePixelRatio }, 1500)
+        }
+      },
+    })
+
+    const label = document.getElementById("state")
+    const showState = () => { label.textContent = `TAA ${window.mgr.taa.enabled ? "ON" : "OFF"} — press T to toggle` }
+    if (live) {
+      // Pin full resolution so the perf auto-tuner doesn't change it mid-comparison
+      window.mgr.performantRenderPixelRatio = window.devicePixelRatio
+      window.addEventListener("keydown", (e) => {
+        if (e.key.toLowerCase() !== "t") return
+        window.mgr.taa.enabled = !window.mgr.taa.enabled
+        showState()
+      })
+    }
+  </script>
+</body>
+</html>
