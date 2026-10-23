@@ -23,6 +23,7 @@
         <option value="model" selected>model</option>
         <option value="camera">camera</option>
         <option value="both">model + camera</option>
+        <option value="parts">parts (clips slide)</option>
       </select>
       <output id="motion-speed-out"></output>
     </div>
@@ -33,6 +34,41 @@
 
     <h2>Toggles</h2>
     <div class="toggles" id="toggles"></div>
+
+    <h2>Modern TAA</h2>
+    <div class="row">
+      <label for="preset">preset</label>
+      <select id="preset">
+        <option value="modern">modern</option>
+        <option value="legacy">legacy (previous)</option>
+      </select>
+    </div>
+    <div class="toggles" id="modern-toggles"></div>
+    <div class="row">
+      <label for="box-mode">clamp box</label>
+      <select id="box-mode">
+        <option value="variance">mean ± Γσ</option>
+        <option value="minmax">min/max × Γ</option>
+        <option value="intersection">variance ∩ min/max</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="debug-view">debug view</label>
+      <select id="debug-view">
+        <option value="0">off</option>
+        <option value="1">locks (red)</option>
+        <option value="2">depth: trusted / disoccluded</option>
+        <option value="3">glass mask (blue)</option>
+        <option value="4">motion (red x, green y) + blend (blue)</option>
+      </select>
+    </div>
+    <div id="modern"></div>
+
+    <h2>Motion blur</h2>
+    <div id="blur"></div>
+
+    <h2>Specular AA</h2>
+    <div id="specular"></div>
 
     <h2>Temporal</h2>
     <div id="temporal"></div>
