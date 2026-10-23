@@ -20,16 +20,16 @@ class ThreeSceneManager {
 		this.envmapUrl = data.envmapUrl
 		// this.envmapUrl = HDRIMAP;
 		this.lowPerformanceSettings = {
-			disableAA: data.lowPerformanceSettings?.disableAA ?? false,
+			disableMSAA: data.lowPerformanceSettings?.disableMSAA ?? false,
 			lowResolution: data.lowPerformanceSettings?.lowResolution ?? false,
 		}
 		this.baseLoadPixelRatio = data.pixelRatio ?? window.devicePixelRatio
 		this.initialRenderPixelRatio = this.lowPerformanceSettings.lowResolution ? data.pixelRatio / 2 : this.baseLoadPixelRatio
 		this.performantRenderPixelRatio = null
-		// this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 4;
-		// this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 0;
+		// this.msaaSamples = this.lowPerformanceSettings.disableMSAA ? 0 : 4;
+		// this.msaaSamples = this.lowPerformanceSettings.disableMSAA ? 0 : 0;
 		// 4 samples: thin bright edges (e.g. the 2.4mm frame sides) slip between the 2 sample rows of 2x MSAA
-		this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 4;
+		this.msaaSamples = this.lowPerformanceSettings.disableMSAA ? 0 : 4;
 		// Tonemapped resolve only pays off with MSAA
 		this.resolvePass = null
 		this.geometryPass = null

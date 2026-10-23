@@ -343,13 +343,13 @@ class MonkView extends HTMLElement {
     const isFirefoxMacOrAndroid = /(Macintosh|Android)(?!.*KHTML).*Gecko/i.test(userAgent);
   
     if (isFirefoxMacOrAndroid && this.useOffscreenCanvas) {
-      return { disableAA: true, lowResolution: true };
+      return { disableMSAA: true, lowResolution: true };
     }
     if (isFirefoxMacOrAndroid) {
-      return { disableAA: true, lowResolution: false };
+      return { disableMSAA: true, lowResolution: false };
     }
   
-    return { disableAA: false, lowResolution: false };
+    return { disableMSAA: false, lowResolution: false };
   }
 
   startWorker(canvas: HTMLCanvasElement): void {
