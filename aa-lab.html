@@ -6,21 +6,36 @@
   <style>
     html, body { margin: 0; background: #000; }
     canvas { width: 900px; height: 600px; display: block; }
+    /* ?live=1: fill the viewport; measurements use the fixed 900x600 */
+    body.live { overflow: hidden; }
+    body.live canvas { width: 100vw; height: 100vh; }
   </style>
 </head>
 <body>
   <canvas id="c"></canvas>
-  <div id="state" style="position: fixed; left: 12px; bottom: 12px; color: #0f0; font: 14px monospace;"></div>
+  <div style="position: fixed; left: 12px; bottom: 12px; display: flex; gap: 8px; align-items: center; color: #0f0; font: 14px monospace;">
+    <button id="toggle-msaa">MSAA</button>
+    <button id="toggle-taa">TAA</button>
+    <button id="toggle-smaa">SMAA</button>
+    <button id="toggle-clamp">Grazing clamp</button>
+    <label>angle <input id="clamp-angle" type="range" min="0.05" max="1" step="0.01"></label>
+    <label>limit <input id="clamp-limit" type="range" min="-2.3" max="0.3" step="0.01"></label>
+    <button id="toggle-static">Static convergence</button>
+    <span id="state"></span>
+  </div>
   <script type="module">
     import { init } from "/src/renderer.js"
     import * as THREE from "three"
     window.THREE = THREE
 
-    // ?mode=tmr4 (TAA off) | taa (default); ?live=1 keeps the normal render loop, T toggles TAA
+    // ?mode=taa (default) | taa+smaa | tmr4 (TAA off) | tmr4+smaa; ?live=1 keeps the normal render loop,
+    // M toggles MSAA, T TAA, C static convergence, S SMAA, G grazing clamp (?clamp=0 starts with it off); ?smaa=0 builds the pipeline without the SMAA pass
     const params = new URLSearchParams(location.search)
-    const mode = params.get("mode") ?? "taa"
+    // A literal "+" in a query string decodes as a space
+    const mode = (params.get("mode") ?? "taa").replace(" ", "+")
     const live = params.get("live") === "1"
     window.mode = mode
+    if (live) document.body.classList.add("live")
 
     const canvas = document.getElementById("c")
     window.mgr = init({
@@ -36,9 +51,12 @@
       initDelayInteractive: 0,
       startup: "auto",
       lowPerformanceSettings: { disableAA: false, lowResolution: false },
+      smaa: params.get("smaa") !== "0",
+      grazingSpecularClamp: params.get("clamp") !== "0",
       perfSampling: { stabilityDuration: 0, measureDuration: 0.1 },
       e_loaded: () => {
-        if (mode !== "taa") window.mgr.taa.enabled = false
+        if (!mode.startsWith("taa")) window.mgr.taa.enabled = false
+        if (window.mgr.smaaPass) window.mgr.smaaPass.enabled = mode.endsWith("+smaa")
         window.loaded = true
         if (live) {
           showState()
@@ -49,14 +67,46 @@
     })
 
     const label = document.getElementById("state")
-    const showState = () => { label.textContent = `TAA ${window.mgr.taa.enabled ? "ON" : "OFF"} — press T to toggle` }
+    const onOff = (enabled) => enabled ? "ON" : "OFF"
+    const showState = () => {
+      const { geometryPass, taa, smaaPass, grazingClamp } = window.mgr
+      label.textContent = `MSAA ${geometryPass.samples}x, TAA ${onOff(taa.enabled)}, ` +
+        `static convergence ${onOff(taa.staticConvergence)}, SMAA ${onOff(smaaPass?.enabled)}, ` +
+        `grazing clamp ${onOff(grazingClamp.enabled)} (angle ${grazingClamp.angle}, limit ${grazingClamp.limit.toPrecision(2)})` +
+        ` — press M / T / C / S / G to toggle`
+    }
+    const toggleTAA = () => { window.mgr.taa.enabled = !window.mgr.taa.enabled; showState() }
+    const toggleSMAA = () => { if (window.mgr.smaaPass) window.mgr.smaaPass.enabled = !window.mgr.smaaPass.enabled; showState() }
+    document.getElementById("toggle-taa").addEventListener("click", toggleTAA)
+    const toggleMSAA = () => {
+      const { geometryPass, taa, msaaSamples } = window.mgr
+      geometryPass.samples = geometryPass.samples > 0 ? 0 : msaaSamples
+      taa.reset()
+      showState()
+    }
+    document.getElementById("toggle-msaa").addEventListener("click", toggleMSAA)
+    const toggleClamp = () => { window.mgr.grazingClamp.enabled = !window.mgr.grazingClamp.enabled; showState() }
+    document.getElementById("toggle-clamp").addEventListener("click", toggleClamp)
+    // The limit slider is logarithmic: useful limits span 0.005 to 2
+    const sliders = { angle: [(v) => v, (v) => v], limit: [Math.log10, (v) => 10 ** v] }
+    for (const [name, [toSlider, fromSlider]] of Object.entries(sliders)) {
+      const input = document.getElementById(`clamp-${name}`)
+      input.value = toSlider(window.mgr.grazingClamp[name])
+      input.addEventListener("input", () => { window.mgr.grazingClamp[name] = fromSlider(Number(input.value)); showState() })
+    }
+    const toggleStatic = () => { window.mgr.taa.staticConvergence = !window.mgr.taa.staticConvergence; showState() }
+    document.getElementById("toggle-smaa").addEventListener("click", toggleSMAA)
+    document.getElementById("toggle-static").addEventListener("click", toggleStatic)
     if (live) {
       // Pin full resolution so the perf auto-tuner doesn't change it mid-comparison
       window.mgr.performantRenderPixelRatio = window.devicePixelRatio
       window.addEventListener("keydown", (e) => {
-        if (e.key.toLowerCase() !== "t") return
-        window.mgr.taa.enabled = !window.mgr.taa.enabled
-        showState()
+        const key = e.key.toLowerCase()
+        if (key === "m") toggleMSAA()
+        else if (key === "t") toggleTAA()
+        else if (key === "s") toggleSMAA()
+        else if (key === "c") toggleStatic()
+        else if (key === "g") toggleClamp()
       })
     }
   </script>

@@ -12,11 +12,12 @@ Let's grab three.js and see what we can do.
 ## Cool features:
 
 - **Offscreen Canvas + Web Workers!** No more jank in the main thread — keeps your UI buttery smooth. Although for very slow devices, it won't really help. But hey, no more jank when uploading textures to the GPU, which happened a lot for my models using model-viewer.
-- **Performance Auto-Tuning:** Detects device power in the first 1500ms after firing the renderer, tweaking resolution and MSAA for the best experience.
+- **Performance Auto-Tuning:** Detects device power in the first 1500ms after firing the renderer. Below 54 FPS it drops MSAA first (TAA alone is the best quality per millisecond) and measures again, then lowers the resolution only if it's still too slow.
 - **Total Three.js Control:** Full access to the rendering pipeline — custom shaders, post-processing, etc.
 - **Ultra HDR Environment Maps:** Loads Adobe Gain Map JPGs, courtesy of [MONOGRID gainmap-js](https://github.com/MONOGRID/gainmap-js)
 - **Smooth 3D Interaction:** Custom orbit controls with damping, auto-rotation, and slick transitions. Everything is smooth: camera interaction, model rotation, enabling/disabling interactions, interrumpting rotations or movement.
 - **Tonemapped MSAA Resolve:** With an [HDR pipeline](https://mynameismjp.wordpress.com/2012/10/24/msaa-overview/) and a high-contrast scene, hardware MSAA averages samples in linear HDR, so a half-covered pixel of a bright edge still tonemaps to pure white and edges stay jagged no matter the sample count. Opaque materials write a Reinhard-encoded colour matching the final tone mapping, the hardware resolve averages what ends up on screen, and `TonemappedResolvePass` decodes back to linear HDR before bloom and tone mapping. Transparent objects (the glass) are drawn after the decode, since blending doesn't commute with the encoding. Combined with 4x MSAA, thin bright edges come out close to 16x supersampling.
+- **Temporal Antialiasing:** `TemporalAAPass` jitters the camera and accumulates frames on top of the 4x MSAA, smoothing the sub-pixel steps MSAA leaves on thin edges. Reprojection uses depth plus the model's rigid motion (no velocity buffer needed for one object in front of a static background). While nothing moves, the history becomes a running average over all jitter positions without clipping, so still frames converge to a steady, render-like image instead of flickering with the jitter cycle.
 - **Grazing-Angle Specular Clamp:** Seen edge-on, the 2.4mm edges of the frame shrink to sub-pixel slivers while Fresnel makes their reflection the brightest in the scene: thin HDR lines that stay jagged whatever the sample count. `GrazingSpecularClamp` patches the materials to compress the environment reflection above a low limit only on surfaces seen at a grazing angle (from the face normal, so normal maps don't make it noisy). Not physically based, but neither are the stairs. On by default, `grazing-specular-clamp="false"` disables it.
 - **Startup Transition:** smooth animations = ♥ UX
 - **Augmented Reality (AR):** Auto-detects AR support on iOS/Android and adds a quick link to jump in, loading optimized GLB or USDZ files.
@@ -30,9 +31,9 @@ Additional contribution to @monogrid/gainmap-js which made it compatible with we
 
 ## Known issues
 
-- Chrome precise FPS measurement is just pain. It is not possible. So the best way to make sure every device will run as smooth as they can is to lower graphics features across as much devices as possible. My current implementation disables MSAA for Chrome on Android, leaving it only mostly for iOS devices and desktop systems (at x4 MSAA, see Tonemapped MSAA Resolve above)
+- Chrome precise FPS measurement is just pain. It is not possible. Android devices used to get MSAA disabled and a 2x pixel ratio cap up front; they have improved enough that they now get the same settings as iOS and desktop (4x MSAA + TAA), and the auto-tuner drops MSAA, then resolution, on the ones that can't keep up.
 - Same as this, Firefox on Mac and Android works horrible with MSAA, high resolution and offscreen canvas. MSAA is disabled and pixel ratio is lowered.
-- Effects like SMAA in `postprocessing` won't work in offscreen canvas mode because they depend on browser features like Image Decoding which are only available in javascript's main thread. Considering porting the effect to work on a web worker somehow.
+- `postprocessing`'s SMAAEffect doesn't work in offscreen canvas mode: it decodes its lookup textures with `Image`, which workers lack. `src/postprocessing/SMAAEffect.ts` decodes them with `createImageBitmap` instead (opt-in via the `smaa="true"` attribute, off by default: it doesn't improve the thin bright edges beyond TAA).
 
 ## Using it
 

@@ -213,6 +213,7 @@ class MonkView extends HTMLElement {
     initDelayInteractive: number;
     startup: string;
     lowPerformanceSettings: ReturnType<MonkView["getLowPerformanceSettings"]>;
+    smaa: boolean;
     grazingSpecularClamp: boolean;
     perfSampling: {
       stabilityDuration: number;
@@ -220,7 +221,7 @@ class MonkView extends HTMLElement {
     }
   };
   public isInteractive: boolean = false;
-  private limitPixelRatio: number = /Android/i.test(navigator.userAgent) ? 2.0 : Infinity;
+  private limitPixelRatio: number = Infinity;
   private sceneManager: any = null;
   private worker: Worker | null = null;
   private proxy: ElementProxy | null = null;
@@ -257,6 +258,7 @@ class MonkView extends HTMLElement {
       initDelayInteractive,
       startup,
       lowPerformanceSettings: this.getLowPerformanceSettings(),
+      smaa: this.getAttribute("smaa") === "true",
       grazingSpecularClamp: this.getAttribute("grazing-specular-clamp") !== "false",
       perfSampling
     };
@@ -337,13 +339,13 @@ class MonkView extends HTMLElement {
 
   private getLowPerformanceSettings() {
     const userAgent = navigator.userAgent;
+    // Firefox, not the platform: Android devices get the same settings as iOS, the auto-tuner handles slow ones
     const isFirefoxMacOrAndroid = /(Macintosh|Android)(?!.*KHTML).*Gecko/i.test(userAgent);
-    const isAndroid = /Android/i.test(userAgent);
   
     if (isFirefoxMacOrAndroid && this.useOffscreenCanvas) {
       return { disableAA: true, lowResolution: true };
     }
-    if (isAndroid || isFirefoxMacOrAndroid) {
+    if (isFirefoxMacOrAndroid) {
       return { disableAA: true, lowResolution: false };
     }
   

@@ -1,19 +1,15 @@
 import {
     HalfFloatType,
     Matrix4,
-    Mesh,
     Object3D,
-    OrthographicCamera,
     PerspectiveCamera,
-    PlaneGeometry,
     RGBAFormat,
     RGBFormat,
-    Scene,
     Uniform,
     Vector2,
     WebGLRenderTarget
 } from "three";
-import { CopyMaterial, FullscreenMaterial, GBuffer, Pass } from "postprocessing";
+import { FullscreenMaterial, GBuffer, Pass } from "postprocessing";
 
 /**
  * Temporal antialiasing.
@@ -33,6 +29,10 @@ import { CopyMaterial, FullscreenMaterial, GBuffer, Pass } from "postprocessing"
  * History is clamped to the current neighbourhood (variance clipping in YCoCg) and blended in the same
  * Reinhard-encoded space as the tonemapped MSAA resolve, so HDR highlights don't dominate the clamp.
  *
+ * While nothing moves, the history is exact, so it becomes a running average over all jitter positions (down to
+ * {@link staticBlend}) without clipping. Otherwise thin edges flicker with the jitter cycle in still frames: a fixed
+ * blend weights the latest few jitter positions, and the clip resets the history towards the current one.
+ *
  * @see https://de45xmedrsdbp.cloudfront.net/Resources/files/TemporalAA_small-59732822.pdf
  * @see https://github.com/playdeadgames/temporal
  */
@@ -40,6 +40,9 @@ import { CopyMaterial, FullscreenMaterial, GBuffer, Pass } from "postprocessing"
 const fragmentShader = /* glsl */ `
 #include <pp_default_output_pars_fragment>
 #include <pp_input_buffer_pars_fragment>
+
+// The pass output, written along with the history. See TemporalAAPass.history.
+layout(location = 1) out mediump vec4 out_Output;
 
 uniform highp sampler2D depthBuffer;
 uniform sampler2D historyBuffer;
@@ -55,6 +58,7 @@ uniform float exposure;
 uniform float blend;
 uniform float varianceGamma;
 uniform bool historyValid;
+uniform bool clipHistory;
 uniform float filterSharpness;
 
 in vec2 vUv;
@@ -214,6 +218,7 @@ void main() {
 	if(!historyValid || offscreen) {
 
 		out_Color = vec4(decode(YCoCgToRGB(current)), 1.0);
+		out_Output = out_Color;
 		return;
 
 	}
@@ -222,10 +227,16 @@ void main() {
 	vec3 sigma = sqrt(max(m2 / 5.0 - mean * mean, 0.0)) * varianceGamma;
 
 	vec3 history = RGBToYCoCg(encode(sampleHistory(historyUv)));
-	history = clipToBox(mean - sigma, mean + sigma, history);
+
+	if(clipHistory) {
+
+		history = clipToBox(mean - sigma, mean + sigma, history);
+
+	}
 
 	vec3 result = mix(history, current, blend);
 	out_Color = vec4(decode(YCoCgToRGB(result)), 1.0);
+	out_Output = out_Color;
 
 }
 `;
@@ -250,6 +261,7 @@ class TemporalAAMaterial extends FullscreenMaterial {
                 blend: new Uniform(0.2),
                 varianceGamma: new Uniform(1.0),
                 historyValid: new Uniform(false),
+                clipHistory: new Uniform(true),
                 filterSharpness: new Uniform(5.0)
             }
         });
@@ -279,6 +291,27 @@ function halton(index: number, base: number): number {
     }
 
     return result;
+
+}
+
+/**
+ * Compares matrices with a tolerance far below a pixel of motion, so camera damping that has visually settled counts
+ * as still.
+ */
+
+function matricesEqual(a: Matrix4, b: Matrix4): boolean {
+
+    for(let i = 0; i < 16; ++i) {
+
+        if(Math.abs(a.elements[i] - b.elements[i]) > 1e-6) {
+
+            return false;
+
+        }
+
+    }
+
+    return true;
 
 }
 
@@ -350,6 +383,23 @@ export interface TemporalAAPassOptions {
 
     filterSharpness?: number;
 
+    /**
+     * The lowest weight of the current frame while nothing moves. Lower converges to a smoother, steadier still image
+     * but takes longer: the weight ramps down as a running average, 1 / (1 / blend + still frames).
+     *
+     * @defaultValue 0.02
+     */
+
+    staticBlend?: number;
+
+    /**
+     * Controls whether the history converges while nothing moves. See {@link staticBlend}.
+     *
+     * @defaultValue true
+     */
+
+    staticConvergence?: boolean;
+
 }
 
 /**
@@ -385,14 +435,26 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
     jitterSamples: number;
 
     /**
-     * Ping-pong history: one is read while the other is written.
+     * The lowest weight of the current frame while nothing moves.
+     */
+
+    staticBlend: number;
+
+    /**
+     * Controls whether the history converges while nothing moves.
+     */
+
+    staticConvergence: boolean;
+
+    /**
+     * Ping-pong history: one is read while the other is written. Both also have the output texture as a second
+     * attachment, so a single draw writes the history and the output.
      */
 
     private readonly history: [WebGLRenderTarget, WebGLRenderTarget];
-    private readonly copyMaterial: CopyMaterial;
-    private readonly copyScene: Scene;
-    private readonly copyCamera: OrthographicCamera;
     private frame: number;
+    private stillFrames: number;
+    private _blend: number;
 
     private readonly projection: Matrix4;
     private readonly viewProjection: Matrix4;
@@ -412,43 +474,41 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
         blend = 0.2,
         jitterScale = 1.0,
         jitterSamples = 8,
-        filterSharpness = 5.0
+        filterSharpness = 5.0,
+        staticBlend = 0.02,
+        staticConvergence = true
     }: TemporalAAPassOptions = {}) {
 
         super("TemporalAAPass");
 
         this.fullscreenMaterial = new TemporalAAMaterial(new Uniform(exposure));
-        this.fullscreenMaterial.uniforms.blend.value = blend;
+        this._blend = blend;
+        this.staticBlend = staticBlend;
+        this.staticConvergence = staticConvergence;
+        this.stillFrames = 0;
         this.fullscreenMaterial.uniforms.filterSharpness.value = filterSharpness;
 
         this.input.gBuffer.add(GBuffer.COLOR);
         this.input.gBuffer.add(GBuffer.DEPTH);
 
-        // The history accumulates over many frames, R11G11B10 measurably loses edge quality there. Linear filtering:
-        // the 5-tap Catmull-Rom relies on it.
-        const historyOptions = { type: HalfFloatType, format: RGBAFormat, depthBuffer: false };
-        this.history = [new WebGLRenderTarget(1, 1, historyOptions), new WebGLRenderTarget(1, 1, historyOptions)];
-        this.history.forEach((buffer) => this.disposables.add(buffer));
-
         // The output stays in the 32-bit format of the rest of the pipeline. Passes downstream adopt the format of
-        // their input, so RGBA16F here would double the bandwidth of bloom.
+        // their input, so RGBA16F here would double the bandwidth of bloom. It's only ever written as an attachment of
+        // the history targets.
         const outputBuffer = new WebGLRenderTarget(1, 1, { type: HalfFloatType, format: RGBFormat, depthBuffer: false });
         outputBuffer.texture.internalFormat = "R11F_G11F_B10F";
         this.output.defaultBuffer = outputBuffer;
 
-        // Copies the history into the output. Writes HDR, see TonemappedResolveMaterial.
-        this.copyMaterial = new CopyMaterial();
-        this.copyMaterial.colorSpaceConversion = false;
-        this.copyMaterial.outputPrecision = "mediump";
-        this.copyMaterial.onBeforeCompile = () => {};
-        this.disposables.add(this.copyMaterial);
+        // The history accumulates over many frames, R11G11B10 measurably loses edge quality there. Linear filtering:
+        // the 5-tap Catmull-Rom relies on it. Writing the output as a second attachment saves a copy pass, which
+        // costs ~1.3 ms at 3070x2050 on an M1: copyTexSubImage2D can't convert RGBA16F to R11G11B10.
+        const historyOptions = { type: HalfFloatType, format: RGBAFormat, depthBuffer: false, count: 2 };
+        this.history = [new WebGLRenderTarget(1, 1, historyOptions), new WebGLRenderTarget(1, 1, historyOptions)];
+        this.history.forEach((buffer) => {
 
-        // Fullscreen quad: the vertex shader of FullscreenMaterial uses the positions as clip coordinates
-        const copyQuad = new Mesh(new PlaneGeometry(2, 2), this.copyMaterial);
-        copyQuad.frustumCulled = false;
-        this.disposables.add(copyQuad.geometry);
-        this.copyScene = new Scene().add(copyQuad);
-        this.copyCamera = new OrthographicCamera();
+            buffer.textures[1] = outputBuffer.texture;
+            this.disposables.add(buffer);
+
+        });
 
         this.jitterPass = new TemporalJitterPass(this);
         this.trackedObject = null;
@@ -491,13 +551,13 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
 
     get blend(): number {
 
-        return this.fullscreenMaterial.uniforms.blend.value as number;
+        return this._blend;
 
     }
 
     set blend(value: number) {
 
-        this.fullscreenMaterial.uniforms.blend.value = value;
+        this._blend = value;
 
     }
 
@@ -515,6 +575,7 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
 
         // Restart the jitter sequence so that convergence after a reset is deterministic
         this.frame = 0;
+        this.stillFrames = 0;
 
     }
 
@@ -594,6 +655,13 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
 
         const uniforms = this.fullscreenMaterial.uniforms;
 
+        // The output is attached to the history targets, see history
+        if(outputBuffer === null) {
+
+            return;
+
+        }
+
         // camera.matrixWorldInverse and the object matrix were updated while rendering the geometry
         uniforms.inverseViewProjectionJittered.value
             .multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).invert();
@@ -612,17 +680,20 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
 
         }
 
+        const still = this.staticConvergence && uniforms.historyValid.value &&
+            matricesEqual(this.viewProjection, this.previousViewProjection) &&
+            matricesEqual(this.objectMatrix, this.previousObjectMatrix);
+
+        this.stillFrames = still ? this.stillFrames + 1 : 0;
+        uniforms.blend.value = still ? Math.max(1.0 / (1.0 / this._blend + this.stillFrames), this.staticBlend) : this._blend;
+        uniforms.clipHistory.value = !still;
+
         const historyRead = this.history[this.frame % 2];
         const historyWrite = this.history[(this.frame + 1) % 2];
         uniforms.historyBuffer.value = historyRead.texture;
 
         this.setRenderTarget(historyWrite);
         this.renderFullscreen();
-
-        // copyTexSubImage2D can't convert RGBA16F to R11G11B10, so copy with a draw
-        this.copyMaterial.inputBuffer = historyWrite.texture;
-        this.setRenderTarget(outputBuffer);
-        renderer.render(this.copyScene, this.copyCamera);
 
         uniforms.historyValid.value = true;
         this.previousViewProjection.copy(this.viewProjection);

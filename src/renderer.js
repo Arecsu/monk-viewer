@@ -5,6 +5,7 @@ import { HDRJPGLoader } from "@monogrid/gainmap-js"
 import { DitheringEffect } from "./postprocessing/DitheringEffect.js"
 import { TonemappedResolvePass } from "./postprocessing/TonemappedResolvePass.js"
 import { TemporalAAPass } from "./postprocessing/TemporalAAPass.js"
+import { SMAAEffect } from "./postprocessing/SMAAEffect.js"
 import { GrazingSpecularClamp } from "./postprocessing/GrazingSpecularClamp.js"
 import { BloomEffect, RenderPipeline, ClearPass, GeometryPass, EffectPass, ToneMappingEffect, ToneMapping } from "postprocessing"
 // import HDRIMAP from "./envmaps/old_bus_depot_4k_blur.jpg?url"
@@ -31,7 +32,11 @@ class ThreeSceneManager {
 		this.msaaSamples = this.lowPerformanceSettings.disableAA ? 0 : 4;
 		// Tonemapped resolve only pays off with MSAA
 		this.resolvePass = null
+		this.geometryPass = null
 		this.taa = null
+		// Optional SMAA after tone mapping; smaaPass.enabled toggles it at runtime
+		this.smaa = data.smaa ?? false
+		this.smaaPass = null
 		// Dims the HDR reflections of edge-on surfaces, which alias into thin bright lines. Always compiled in,
 		// grazingClamp.enabled toggles it at runtime.
 		this.grazingClamp = new GrazingSpecularClamp({ enabled: data.grazingSpecularClamp ?? true })
@@ -212,13 +217,13 @@ class ThreeSceneManager {
 			this.pipeline.add(this.taa.jitterPass)
 			const clearPass = new ClearPass()
 			this.pipeline.add(clearPass)
-			this.pipeline.add(
-				new GeometryPass(this.scene, this.camera, {
-					frameBufferType: THREE.HalfFloatType,
-					// frameBufferType: THREE.UnsignedByteType,
-					samples: this.msaaSamples,
-				})
-			)
+			// geometryPass.samples can be changed at runtime, the resolve pass works without MSAA too
+			this.geometryPass = new GeometryPass(this.scene, this.camera, {
+				frameBufferType: THREE.HalfFloatType,
+				// frameBufferType: THREE.UnsignedByteType,
+				samples: this.msaaSamples,
+			})
+			this.pipeline.add(this.geometryPass)
 			if (this.msaaSamples > 0) {
 				// Resolve MSAA in tonemapped space so bright HDR edges get antialiased
 				this.resolvePass = new TonemappedResolvePass({ exposure: this.renderer.toneMappingExposure })
@@ -246,7 +251,18 @@ class ThreeSceneManager {
 				}),
 				 new DitheringEffect()
 			)
-			this.pipeline.add(effects)
+			if (this.smaa) {
+				// SMAA wants display-referred input, so it runs in its own pass after tone mapping. The sRGB8 buffer in
+				// between quantizes like the canvas, so with smaaPass disabled the output is unchanged. Set before add():
+				// replacing the output of the last pass trips the pipeline's output rerouting.
+				effects.autoSyncDefaultBuffers = false
+				effects.output.defaultBuffer = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: false, colorSpace: THREE.SRGBColorSpace })
+				this.pipeline.add(effects)
+				this.smaaPass = new EffectPass(new SMAAEffect())
+				this.pipeline.add(this.smaaPass)
+			} else {
+				this.pipeline.add(effects)
+			}
 
 			this.pipeline
 				.compile()
@@ -517,15 +533,21 @@ class ThreeSceneManager {
 
 		let frameCount = 0
 		let isMeasuring = false
+		// Clock time at which the warm-up before a measurement ends
+		let warmupEnd = stabilizationTime
+		let measureStart = 0
 
+		// Returns false when the settings changed enough to need another measurement
 		const applyQualitySettings = (fps) => {
 			console.log(`Applying quality settings for FPS: ${fps.toFixed(1)}`)
 
-			// Disable MSAA if FPS is low
-			// if (fps < 55 && this.msaaSamples > 0) {
-				// this.msaaSamples = 0
-				// this.resetPostProcessing()
-			// }
+			// Drop MSAA first: TAA alone is the best quality per millisecond, MSAA costs ~30% of the frame
+			if (fps < 54 && this.geometryPass?.samples > 0) {
+				console.log("Disabling MSAA")
+				this.geometryPass.samples = 0
+				this.taa?.reset()
+				return false
+			}
 
 			// Adjust render resolution
 			if (fps < 54) {
@@ -535,6 +557,8 @@ class ThreeSceneManager {
 
 				this.performantRenderPixelRatio = Math.max(0.8, Math.min(potentialPixelRatio, this.initialRenderPixelRatio))
 			}
+
+			return true
 		}
 
 		const measureFrame = () => {
@@ -550,7 +574,7 @@ class ThreeSceneManager {
 			// this.renderer.render(this.scene, this.camera);
 
 			// Warm-up phase
-			if (!isMeasuring && this.clock.getElapsedTime() < stabilizationTime) {
+			if (!isMeasuring && this.clock.getElapsedTime() < warmupEnd) {
 				requestAnimationFrame(measureFrame)
 				return
 			}
@@ -559,16 +583,23 @@ class ThreeSceneManager {
 			if (!isMeasuring) {
 				isMeasuring = true
 				frameCount = 0
+				measureStart = this.clock.getElapsedTime()
 			}
 			
 			frameCount++
 			
-			const elapsed = this.clock.getElapsedTime() - stabilizationTime
+			const elapsed = this.clock.getElapsedTime() - measureStart
 			if (elapsed >= measureDuration) {
 				const actualFPS = frameCount / elapsed
 				console.log(`Measured FPS: ${actualFPS.toFixed(1)}`)
-				applyQualitySettings(actualFPS)
-				this.startRenderLoop()
+				if (applyQualitySettings(actualFPS)) {
+					this.startRenderLoop()
+				} else {
+					// Measure again with the new settings, after the buffers are recreated
+					isMeasuring = false
+					warmupEnd = this.clock.getElapsedTime() + 0.2
+					requestAnimationFrame(measureFrame)
+				}
 			} else {
 				requestAnimationFrame(measureFrame)
 			}
