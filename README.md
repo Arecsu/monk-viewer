@@ -18,6 +18,8 @@ Let's grab three.js and see what we can do.
 - **Smooth 3D Interaction:** Custom orbit controls with damping, auto-rotation, and slick transitions. Everything is smooth: camera interaction, model rotation, enabling/disabling interactions, interrumpting rotations or movement.
 - **Tonemapped MSAA Resolve:** With an [HDR pipeline](https://mynameismjp.wordpress.com/2012/10/24/msaa-overview/) and a high-contrast scene, hardware MSAA averages samples in linear HDR, so a half-covered pixel of a bright edge still tonemaps to pure white and edges stay jagged no matter the sample count. Opaque materials write a Reinhard-encoded colour matching the final tone mapping, the hardware resolve averages what ends up on screen, and `TonemappedResolvePass` decodes back to linear HDR before bloom and tone mapping. Transparent objects (the glass) are drawn after the decode, since blending doesn't commute with the encoding. Combined with 4x MSAA, thin bright edges come out close to 16x supersampling.
 - **Temporal Antialiasing:** `TemporalAAPass` jitters the camera and accumulates frames on top of the 4x MSAA, smoothing the sub-pixel steps MSAA leaves on thin edges. Reprojection uses depth plus the model's rigid motion (no velocity buffer needed for one object in front of a static background). While nothing moves, the history becomes a running average over all jitter positions without clipping, so still frames converge to a steady, render-like image instead of flickering with the jitter cycle. The history lookup intentionally stays on the same pixel instead of compensating the jitter offset: that is what averages the jitter positions, so still frames converge. Compensating the offset instead tracks the surface sub-pixel by sub-pixel and leaves the 1px jitter visible in still frames (`aa-lab.html` has the toggle; it needs ~0.65px jitter to hide and is not better in motion).
+- **Bounded TAA:** Before bloom, pixels outside the tracked model's padded accumulated screen bounds are known black, so TAA skips their depth/history/filter work. Bounds include the transparent glass, not just opaque depth. This preserves the glass material, MSAA, TAA reconstruction and eight-level bloom. The footprint only grows until the history is reset, so faint motion trails are preserved too. Near-plane crossings, coloured/textured backgrounds, fog or disabled history clamping expand it to full-screen TAA until the next reset. It assumes all rendered geometry belongs to the tracked rigid object, without vertex displacement; standalone `TemporalAAPass` users must opt in with `backgroundFastPath: true`.
+- **Bounded Bloom:** `BoundedBloomEffect` reuses TAA's certified black-background footprint to skip zero-valued luminance and downsample work. Conservative filter padding covers the complete downsample chain, including odd dimensions; all eight levels, thresholds, buffer formats and the upsampling filters are unchanged. It falls back to full-screen work when TAA cannot certify the input, so glass reflections and the wide halo are preserved.
 - **Grazing-Angle Specular Clamp:** Seen edge-on, the 2.4mm edges of the frame shrink to sub-pixel slivers while Fresnel makes their reflection the brightest in the scene: thin HDR lines that stay jagged whatever the sample count. `GrazingSpecularClamp` patches the materials to compress the environment reflection above a low limit only on surfaces seen at a grazing angle (from the face normal, so normal maps don't make it noisy). Not physically based, but neither are the stairs. On by default, `grazing-specular-clamp="false"` disables it.
 - **Startup Transition:** smooth animations = ♥ UX
 - **Augmented Reality (AR):** Auto-detects AR support on iOS/Android and adds a quick link to jump in, loading optimized GLB or USDZ files.
@@ -34,6 +36,35 @@ Additional contribution to @monogrid/gainmap-js which made it compatible with we
 - Chrome precise FPS measurement is just pain. It is not possible. Android devices used to get MSAA disabled and a 2x pixel ratio cap up front; they have improved enough that they now get the same settings as iOS and desktop (4x MSAA + TAA), and the auto-tuner drops MSAA, then resolution, on the ones that can't keep up.
 - Same as this, Firefox on Mac and Android works horrible with MSAA, high resolution and offscreen canvas. MSAA is disabled and pixel ratio is lowered.
 - `postprocessing`'s SMAAEffect doesn't work in offscreen canvas mode: it decodes its lookup textures with `Image`, which workers lack. `src/postprocessing/SMAAEffect.ts` decodes them with `createImageBitmap` instead (opt-in via the `smaa="true"` attribute, off by default: it doesn't improve the thin bright edges beyond TAA).
+
+## Performance checks
+
+`npm test` checks conservative TAA bounds, bloom filter support across rounded mip sizes, composition settings and safe fallback guards (Node 22.6+ with TypeScript stripping).
+
+For GPU measurements, run `npm run dev`, open `/monk-viewer/aa-lab.html?smaa=0`, choose **still** motion and use the browser console:
+
+```js
+const checks = await import('/monk-viewer/tests/taa-browser.js');
+console.table(await checks.validateTaa(window.mgr, window.THREE));
+console.table(await checks.benchmarkTaa(window.mgr, { pixelRatio: 1 }));
+// Repeat at higher resolution, without changing CSS layout:
+console.table(await checks.benchmarkTaa(window.mgr, { pixelRatio: 2 }));
+```
+
+The framebuffer checks compare bounds on/off through rotation, camera orbit, pan, near-plane clipping, resize/DPR changes and fallback settings. The benchmark uses asynchronous `EXT_disjoint_timer_query_webgl2` queries, warm-up frames and alternating A/B order, reporting GPU milliseconds rather than vsync-limited FPS. It rejects disjoint measurements; results vary by GPU/browser. The lab's **TAA bounds** toggle also permits visual comparison.
+
+Bloom checks compare the optimized effect against the unmodified library `BloomEffect`, not against fewer levels or a smaller halo:
+
+```js
+const bloom = await import('/monk-viewer/tests/bloom-browser.js');
+console.table(await bloom.validateBloom(window.mgr, window.THREE));
+console.table(await bloom.benchmarkBloom(window.mgr, { pixelRatio: 1 }));
+console.table(await bloom.benchmarkBloom(window.mgr, { pixelRatio: 2 }));
+```
+
+The bloom suite covers motion, odd/tiny/portrait sizes, resolution scaling, different mip counts/radii, full-resolution upsampling and disabled-TAA/background fallbacks. The lab's **bloom bounds** toggle disables only the optimization, not bloom itself. Savings depend on how much of the image TAA can certify as black; a full-screen history footprint safely gives up the optimization.
+
+WebGPU is not a renderer toggle for this codebase: the custom GLSL passes and `onBeforeCompile` material patches, the current post-processing pipeline and gain-map decoding would need migration. Three.js's WebGL fallback does not make those existing shaders compatible with `WebGPURenderer`; see the [migration guide](https://threejs.org/manual/en/webgpurenderer.html).
 
 ## Using it
 

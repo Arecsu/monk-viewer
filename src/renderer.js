@@ -7,7 +7,8 @@ import { TonemappedResolvePass } from "./postprocessing/TonemappedResolvePass.js
 import { TemporalAAPass } from "./postprocessing/TemporalAAPass.js"
 import { SMAAEffect } from "./postprocessing/SMAAEffect.js"
 import { GrazingSpecularClamp } from "./postprocessing/GrazingSpecularClamp.js"
-import { BloomEffect, RenderPipeline, ClearPass, GeometryPass, EffectPass, ToneMappingEffect, ToneMapping } from "postprocessing"
+import { BoundedBloomEffect } from "./postprocessing/BoundedBloomEffect.js"
+import { RenderPipeline, ClearPass, GeometryPass, EffectPass, ToneMappingEffect, ToneMapping } from "postprocessing"
 // import HDRIMAP from "./envmaps/old_bus_depot_4k_blur.jpg?url"
 import { easeOutQuart, easeInCubic, easeOutCubic } from "js-easing-functions"
 
@@ -215,7 +216,7 @@ class ThreeSceneManager {
 			// The defaults are the settings tuned in aa-lab.html: 1px jitter over 8 Halton positions, a sharp Gaussian
 			// reconstruction filter (k 5), contrast clamp width 1, static convergence, history clamping and the adaptive
 			// filter enabled. Jitter compensation stays off: with it, still frames keep the 1px jitter visible.
-			this.taa = new TemporalAAPass({ exposure: this.renderer.toneMappingExposure })
+			this.taa = new TemporalAAPass({ exposure: this.renderer.toneMappingExposure, backgroundFastPath: true })
 			this.taa.trackedObject = this.model
 			this.pipeline.add(this.taa.jitterPass)
 			const clearPass = new ClearPass()
@@ -242,7 +243,7 @@ class ThreeSceneManager {
 				// 	subpixelQuality: 1.0,
 				// 	samples: 12,
 				// }),
-				new BloomEffect({
+				new BoundedBloomEffect(this.taa, {
 					luminanceSmoothing: 0.4,
 					intensity: 0.3,
 					radius: 1,

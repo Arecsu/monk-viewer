@@ -201,6 +201,9 @@
 
     const toggles = [
       ["taa", "TAA", () => T().enabled, (v) => { T().enabled = v }],
+      ["background", "TAA bounds", () => T().backgroundFastPath, (v) => { T().backgroundFastPath = v; T().reset() }],
+      ["bloomBounds", "bloom bounds", () => mgr.pipeline.passes.find(p => p.effects)?.effects[0].backgroundFastPath,
+        (v) => { mgr.pipeline.passes.find(p => p.effects).effects[0].backgroundFastPath = v }],
       ["msaa", "MSAA", () => mgr.geometryPass.samples > 0, (v) => {
         mgr.geometryPass.samples = v ? mgr.msaaSamples : 0
         T().reset()
@@ -296,6 +299,7 @@
       jitterCompensation: T().jitterCompensation,
       staticConvergence: T().staticConvergence,
       clampHistory: T().clampHistory,
+      backgroundFastPath: T().backgroundFastPath,
     })
 
     const refresh = () => {

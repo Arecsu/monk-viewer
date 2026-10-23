@@ -224,6 +224,8 @@ class MonkView extends HTMLElement {
   private limitPixelRatio: number = Infinity;
   private sceneManager: any = null;
   private worker: Worker | null = null;
+  private workerStarted: boolean = false;
+  private pendingWorkerStart: boolean | null = null;
   private proxy: ElementProxy | null = null;
   private useOffscreenCanvas: boolean = false;
   // private canInitialize: boolean = false; // unused
@@ -357,18 +359,27 @@ class MonkView extends HTMLElement {
     const worker = new OffscreenCanvasWorker();
     this.worker = worker;
 
-    const handlers = createEventHandlers(this);
-    this.proxy = new ElementProxy(canvas, worker, handlers, this.limitPixelRatio);
-
-    worker.postMessage({
-      type: "start",
-      canvas: offscreen,
-      canvasId: this.proxy.id,
-      ...this.commonOptions,
-    }, [offscreen]);
-
+    // Module workers can receive messages while their imports are still initializing. Wait until the worker has
+    // installed its dispatcher before sending makeProxy, size, or start; otherwise later events have no receiver.
     worker.onmessage = (e) => {
+      if (this.worker !== worker) return;
       switch (e.data.type) {
+        case 'initialized': {
+          if (this.workerStarted) break;
+          const handlers = createEventHandlers(this);
+          this.proxy = new ElementProxy(canvas, worker, handlers, this.limitPixelRatio);
+          worker.postMessage({
+            ...this.commonOptions,
+            startup: this.pendingWorkerStart === null ? this.commonOptions.startup :
+              (this.pendingWorkerStart ? 'auto' : 'manual'),
+            type: 'start',
+            canvas: offscreen,
+            canvasId: this.proxy.id,
+          }, [offscreen]);
+          this.workerStarted = true;
+          this.pendingWorkerStart = null;
+          break;
+        }
         case 'interactivity':
           this.handleInteractivityChange(e.data.state);
           break
@@ -388,6 +399,8 @@ class MonkView extends HTMLElement {
       this.worker.postMessage({ type: "dispose" }); // dispose() in renderer.js
       this.worker.terminate();
       this.worker = null;
+      this.workerStarted = false;
+      this.pendingWorkerStart = null;
       if (this.proxy) {
         this.proxy.disconnect(); // Disconnect ResizeObserver
         this.proxy = null;
@@ -414,7 +427,8 @@ class MonkView extends HTMLElement {
   attemptInit(): void {
     // this.canInitialize = true; // unused
     if (this.worker) {
-      this.worker.postMessage({ type: "enableRendering" });
+      if (this.workerStarted) this.worker.postMessage({ type: "enableRendering" });
+      else this.pendingWorkerStart = true;
     } else if (this.sceneManager) {
       this.sceneManager.enableRendering();
     }
@@ -423,7 +437,8 @@ class MonkView extends HTMLElement {
   abortInit(): void {
     // this.canInitialize = false; // unused
     if (this.worker) {
-      this.worker.postMessage({ type: "disableRendering" });
+      if (this.workerStarted) this.worker.postMessage({ type: "disableRendering" });
+      else this.pendingWorkerStart = false;
     } else if (this.sceneManager) {
       this.sceneManager.disableRendering();
     }

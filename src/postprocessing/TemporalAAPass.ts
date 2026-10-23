@@ -1,4 +1,6 @@
 import {
+    Box3,
+    Color,
     HalfFloatType,
     Matrix4,
     Object3D,
@@ -7,9 +9,11 @@ import {
     RGBFormat,
     Uniform,
     Vector2,
+    Vector4,
     WebGLRenderTarget
 } from "three";
 import { FullscreenMaterial, GBuffer, Pass } from "postprocessing";
+import { TemporalAABounds } from "./TemporalAABounds.js";
 
 /**
  * Temporal antialiasing.
@@ -60,6 +64,7 @@ uniform mat4 objectMotion;
 uniform vec2 texelSize;
 uniform vec2 jitterOffset;
 uniform vec2 previousJitter;
+uniform vec4 backgroundBounds;
 uniform float exposure;
 uniform float blend;
 uniform float varianceGamma;
@@ -178,6 +183,16 @@ const ivec2 NEIGHBOURS[5] = ivec2[5](ivec2(0, 0), ivec2(-1, 0), ivec2(1, 0), ive
 
 void main() {
 
+	// The viewer is one bounded rigid object against black, before bloom. Outside its padded history footprint
+	// there has never been a signal to reconstruct. Write BOTH attachments so stale history cannot return later.
+	if(any(lessThan(vUv, backgroundBounds.xy)) || any(greaterThan(vUv, backgroundBounds.zw))) {
+
+		out_Color = vec4(0.0, 0.0, 0.0, 1.0);
+		out_Output = out_Color;
+		return;
+
+	}
+
 	// Velocity of the closest surface in the neighbourhood. The MSAA depth resolve keeps a single sample, so the depth
 	// of a sub-pixel edge is often the background's: without this, thin edges would lag behind as static.
 	vec2 closestUv = vUv;
@@ -276,6 +291,7 @@ class TemporalAAMaterial extends FullscreenMaterial {
                 texelSize: new Uniform(new Vector2()),
                 jitterOffset: new Uniform(new Vector2()),
                 previousJitter: new Uniform(new Vector2()),
+                backgroundBounds: new Uniform(new Vector4(0, 0, 1, 1)),
                 exposure,
                 blend: new Uniform(0.2),
                 varianceGamma: new Uniform(1.0),
@@ -470,6 +486,17 @@ export interface TemporalAAPassOptions {
 
     clampHistory?: boolean;
 
+    /**
+     * Skip reconstruction outside the tracked object's accumulated screen bounds, including transparent children.
+     * The footprint only grows until reset(), preserving even faint history trails after motion.
+     * Opt in only when ALL rendered geometry belongs to that rigid object, with no vertex displacement.
+     * Automatically falls back for non-black/textured backgrounds, fog, unsafe projection or unclamped history.
+     *
+     * @defaultValue false
+     */
+
+    backgroundFastPath?: boolean;
+
 }
 
 /**
@@ -522,6 +549,9 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
 
     clampHistory: boolean;
 
+    /** @see {@link TemporalAAPassOptions.backgroundFastPath} */
+    backgroundFastPath: boolean;
+
     /**
      * Ping-pong history: one is read while the other is written. Both also have the output texture as a second
      * attachment, so a single draw writes the history and the output.
@@ -539,6 +569,10 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
     private readonly previousObjectMatrix: Matrix4;
     private readonly jitter: Vector2;
     private jittered: boolean;
+    private readonly boundsProjector = new TemporalAABounds();
+    private readonly worldBounds = new Box3();
+    private readonly currentBounds = new Vector4(0, 0, 1, 1);
+    private readonly previousBounds = new Vector4(0, 0, 1, 1);
 
     /**
      * Constructs a new temporal antialiasing pass.
@@ -558,7 +592,8 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
         staticBlend = 0.02,
         staticConvergence = true,
         varianceGamma = 1.0,
-        clampHistory = true
+        clampHistory = true,
+        backgroundFastPath = false
     }: TemporalAAPassOptions = {}) {
 
         super("TemporalAAPass");
@@ -568,6 +603,7 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
         this.staticBlend = staticBlend;
         this.staticConvergence = staticConvergence;
         this.clampHistory = clampHistory;
+        this.backgroundFastPath = backgroundFastPath;
         this.stillFrames = 0;
 
         const uniforms = this.fullscreenMaterial.uniforms;
@@ -816,6 +852,40 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
 
     }
 
+    private updateBackgroundBounds(): void {
+
+        const bounds = this.currentBounds.set(0, 0, 1, 1);
+        const scene = this.scene;
+        const object = this.trackedObject;
+        const background = scene?.background;
+
+        if(this.backgroundFastPath && this.clampHistory && object !== null && scene?.fog === null &&
+            background instanceof Color && background.r === 0 && background.g === 0 && background.b === 0) {
+
+            // Geometry rendering has already updated world matrices. Box3 includes the glass, even though it doesn't
+            // write depth. Recompute from cached geometry boxes so child transforms and camera motion stay covered.
+            this.worldBounds.setFromObject(object);
+            const { width, height } = this.resolution;
+            this.boundsProjector.project(this.worldBounds, this.viewProjection, width, height,
+                3 + Math.abs(this.jitterScale), bounds);
+
+        }
+
+        const uniforms = this.fullscreenMaterial.uniforms;
+        const output = uniforms.backgroundBounds.value as Vector4;
+        output.copy(bounds);
+
+        if(uniforms.historyValid.value) {
+
+            // Keep the entire history footprint, not just last frame's silhouette: even clamped history can leave a
+            // faint tail after motion. An unsafe projection expands this to full screen until the next reset().
+            output.set(Math.min(bounds.x, this.previousBounds.x), Math.min(bounds.y, this.previousBounds.y),
+                Math.max(bounds.z, this.previousBounds.z), Math.max(bounds.w, this.previousBounds.w));
+
+        }
+
+    }
+
     render(): void {
 
         const renderer = this.renderer;
@@ -843,6 +913,7 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
         this.viewProjection.multiplyMatrices(this.projection, camera.matrixWorldInverse);
         uniforms.viewProjection.value.copy(this.viewProjection);
         uniforms.previousViewProjection.value.copy(this.previousViewProjection);
+        this.updateBackgroundBounds();
 
         if(this.trackedObject !== null) {
 
@@ -873,6 +944,7 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
         uniforms.historyValid.value = true;
         this.previousViewProjection.copy(this.viewProjection);
         this.previousObjectMatrix.copy(this.objectMatrix);
+        this.previousBounds.copy(uniforms.backgroundBounds.value);
         this.restoreProjection(camera);
         ++this.frame;
 

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "deploy": "tsc && vite build && gh-pages --dotfiles --nojekyll -d dist"

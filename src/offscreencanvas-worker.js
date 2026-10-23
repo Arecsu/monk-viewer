@@ -140,3 +140,6 @@ self.onmessage = function (e) {
 	}
 	fn(e.data)
 }
+
+// The main thread must not send proxy/size/start messages until the dispatcher is installed.
+self.postMessage({ type: "initialized" })
