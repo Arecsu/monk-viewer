@@ -211,7 +211,10 @@ class ThreeSceneManager {
 	setupPostProcessing() {
 		return new Promise((resolve, reject) => {
 			this.pipeline = new RenderPipeline(this.renderer)
-			// Smooths what MSAA quantizes into steps, e.g. sub-pixel edges sliding across pixel rows
+			// Smooths what MSAA quantizes into steps, e.g. sub-pixel edges sliding across pixel rows.
+			// The defaults are the settings tuned in aa-lab.html: 1px jitter over 8 Halton positions, a sharp Gaussian
+			// reconstruction filter (k 5), contrast clamp width 1, static convergence, history clamping and the adaptive
+			// filter enabled. Jitter compensation stays off: with it, still frames keep the 1px jitter visible.
 			this.taa = new TemporalAAPass({ exposure: this.renderer.toneMappingExposure })
 			this.taa.trackedObject = this.model
 			this.pipeline.add(this.taa.jitterPass)

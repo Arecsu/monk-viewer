@@ -33,6 +33,11 @@ import { FullscreenMaterial, GBuffer, Pass } from "postprocessing";
  * {@link staticBlend}) without clipping. Otherwise thin edges flicker with the jitter cycle in still frames: a fixed
  * blend weights the latest few jitter positions, and the clip resets the history towards the current one.
  *
+ * The lookup deliberately stays on the same pixel instead of compensating the jitter offset between frames
+ * ({@link jitterCompensation}): that is what averages the jitter positions, so still frames converge to the smooth
+ * image. Compensating instead tracks the surface sub-pixel by sub-pixel, which leaves the jitter visible in still
+ * frames and only pays off with a much lower {@link jitterScale}.
+ *
  * @see https://de45xmedrsdbp.cloudfront.net/Resources/files/TemporalAA_small-59732822.pdf
  * @see https://github.com/playdeadgames/temporal
  */
@@ -54,12 +59,16 @@ uniform mat4 objectMotion;
 
 uniform vec2 texelSize;
 uniform vec2 jitterOffset;
+uniform vec2 previousJitter;
 uniform float exposure;
 uniform float blend;
 uniform float varianceGamma;
 uniform bool historyValid;
 uniform bool clipHistory;
 uniform float filterSharpness;
+uniform float motionFilterSharpness;
+uniform float motionFilterScale;
+uniform float jitterCompensation;
 
 in vec2 vUv;
 
@@ -190,6 +199,15 @@ void main() {
 
 	vec2 historyUv = vUv + (reproject(closestUv, closestDepth) - closestUv);
 
+	// The history holds a jittered image: the texel that contains this surface in the previous frame is offset by the
+	// difference between the two jitter positions. Without it the lookup lands up to two pixels off and the contrast
+	// clamp throws the history away, which is exactly what leaves the jitter pattern visible while the camera moves.
+	historyUv += jitterCompensation * (jitterOffset - previousJitter) * texelSize;
+
+	// Reprojection velocity in pixels, used to widen the reconstruction filter while the history is unreliable.
+	float motion = length((historyUv - vUv) / texelSize);
+	float sharpness = mix(filterSharpness, motionFilterSharpness, clamp(motion * motionFilterScale, 0.0, 1.0));
+
 	vec3 m1 = vec3(0.0);
 	vec3 m2 = vec3(0.0);
 	vec3 filtered = vec3(0.0);
@@ -205,7 +223,7 @@ void main() {
 		// Without it, the history converges to a box filter, which leaves faint steps on thin near-horizontal lines.
 		// Gaussian, as in Karis 2014. See filterSharpness.
 		vec2 d = vec2(NEIGHBOURS[i]) + jitterOffset;
-		float w = exp(-filterSharpness * dot(d, d));
+		float w = exp(-sharpness * dot(d, d));
 		filtered += c * w;
 		filterWeight += w;
 
@@ -257,12 +275,16 @@ class TemporalAAMaterial extends FullscreenMaterial {
                 objectMotion: new Uniform(new Matrix4()),
                 texelSize: new Uniform(new Vector2()),
                 jitterOffset: new Uniform(new Vector2()),
+                previousJitter: new Uniform(new Vector2()),
                 exposure,
                 blend: new Uniform(0.2),
                 varianceGamma: new Uniform(1.0),
                 historyValid: new Uniform(false),
                 clipHistory: new Uniform(true),
-                filterSharpness: new Uniform(5.0)
+                filterSharpness: new Uniform(5.0),
+                motionFilterSharpness: new Uniform(5.0),
+                motionFilterScale: new Uniform(1.0),
+                jitterCompensation: new Uniform(0.0)
             }
         });
 
@@ -400,6 +422,54 @@ export interface TemporalAAPassOptions {
 
     staticConvergence?: boolean;
 
+    /**
+     * The width of the contrast clamp, in standard deviations of the current neighbourhood. Higher keeps more history
+     * while the camera or the object moves (smoother edges, more ghosting), lower rejects more (sharper, more jitter
+     * noise).
+     *
+     * @defaultValue 1.0
+     */
+
+    varianceGamma?: number;
+
+    /**
+     * Controls whether the history lookup compensates for the change in jitter offset between frames. The history is a
+     * jittered image, so a surface lands on a different texel every frame: without the compensation the history lands
+     * up to two pixels away from the surface it belongs to and the contrast clamp throws it away while moving. With it,
+     * the lookup follows the surface instead of averaging the jitter positions, which leaves the jitter visible in still
+     * frames and needs a lower {@link jitterScale} to hide it.
+     *
+     * @defaultValue false
+     */
+
+    jitterCompensation?: boolean;
+
+    /**
+     * The reconstruction filter falloff while the history is rejected, e.g. `exp(-k * d²)` with `k` around 2. Lower is
+     * wider: the current frame alone is smoothed, which hides the jitter pattern in motion at the cost of sharpness.
+     * Defaults to {@link filterSharpness}, which disables the adaptive widening.
+     */
+
+    motionFilterSharpness?: number;
+
+    /**
+     * How quickly the reconstruction filter widens with reprojection velocity, in 1 / pixels. At 1.0 a pixel of motion
+     * per frame uses {@link motionFilterSharpness} fully. 0 disables the adaptive widening.
+     *
+     * @defaultValue 1.0
+     */
+
+    motionFilterScale?: number;
+
+    /**
+     * Controls whether the history is clamped to the current neighbourhood. Disabling it lets the history accumulate
+     * across motion (less jitter, more ghosting). Always disabled while nothing moves.
+     *
+     * @defaultValue true
+     */
+
+    clampHistory?: boolean;
+
 }
 
 /**
@@ -447,6 +517,12 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
     staticConvergence: boolean;
 
     /**
+     * Controls whether the history is clamped to the current neighbourhood while moving.
+     */
+
+    clampHistory: boolean;
+
+    /**
      * Ping-pong history: one is read while the other is written. Both also have the output texture as a second
      * attachment, so a single draw writes the history and the output.
      */
@@ -461,6 +537,7 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
     private readonly previousViewProjection: Matrix4;
     private readonly objectMatrix: Matrix4;
     private readonly previousObjectMatrix: Matrix4;
+    private readonly jitter: Vector2;
     private jittered: boolean;
 
     /**
@@ -475,8 +552,13 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
         jitterScale = 1.0,
         jitterSamples = 8,
         filterSharpness = 5.0,
+        motionFilterSharpness,
+        motionFilterScale = 1.0,
+        jitterCompensation = false,
         staticBlend = 0.02,
-        staticConvergence = true
+        staticConvergence = true,
+        varianceGamma = 1.0,
+        clampHistory = true
     }: TemporalAAPassOptions = {}) {
 
         super("TemporalAAPass");
@@ -485,8 +567,15 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
         this._blend = blend;
         this.staticBlend = staticBlend;
         this.staticConvergence = staticConvergence;
+        this.clampHistory = clampHistory;
         this.stillFrames = 0;
-        this.fullscreenMaterial.uniforms.filterSharpness.value = filterSharpness;
+
+        const uniforms = this.fullscreenMaterial.uniforms;
+        uniforms.filterSharpness.value = filterSharpness;
+        uniforms.motionFilterSharpness.value = motionFilterSharpness ?? filterSharpness;
+        uniforms.motionFilterScale.value = motionFilterScale;
+        uniforms.jitterCompensation.value = jitterCompensation ? 1.0 : 0.0;
+        uniforms.varianceGamma.value = varianceGamma;
 
         this.input.gBuffer.add(GBuffer.COLOR);
         this.input.gBuffer.add(GBuffer.DEPTH);
@@ -521,7 +610,88 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
         this.previousViewProjection = new Matrix4();
         this.objectMatrix = new Matrix4();
         this.previousObjectMatrix = new Matrix4();
+        this.jitter = new Vector2();
         this.jittered = false;
+
+    }
+
+    /**
+     * The falloff of the Gaussian reconstruction filter, `exp(-k * d²)` with `d` in pixels.
+     */
+
+    get filterSharpness(): number {
+
+        return this.fullscreenMaterial.uniforms.filterSharpness.value;
+
+    }
+
+    set filterSharpness(value: number) {
+
+        this.fullscreenMaterial.uniforms.filterSharpness.value = value;
+
+    }
+
+    /**
+     * The falloff of the Gaussian reconstruction filter while moving. See {@link motionFilterSharpness}.
+     */
+
+    get motionFilterSharpness(): number {
+
+        return this.fullscreenMaterial.uniforms.motionFilterSharpness.value;
+
+    }
+
+    set motionFilterSharpness(value: number) {
+
+        this.fullscreenMaterial.uniforms.motionFilterSharpness.value = value;
+
+    }
+
+    /**
+     * How quickly the reconstruction filter widens with reprojection velocity, in 1 / pixels.
+     */
+
+    get motionFilterScale(): number {
+
+        return this.fullscreenMaterial.uniforms.motionFilterScale.value;
+
+    }
+
+    set motionFilterScale(value: number) {
+
+        this.fullscreenMaterial.uniforms.motionFilterScale.value = value;
+
+    }
+
+    /**
+     * The width of the contrast clamp, in standard deviations of the current neighbourhood.
+     */
+
+    get varianceGamma(): number {
+
+        return this.fullscreenMaterial.uniforms.varianceGamma.value;
+
+    }
+
+    set varianceGamma(value: number) {
+
+        this.fullscreenMaterial.uniforms.varianceGamma.value = value;
+
+    }
+
+    /**
+     * Controls whether the history lookup compensates for the change in jitter offset between frames.
+     */
+
+    get jitterCompensation(): boolean {
+
+        return this.fullscreenMaterial.uniforms.jitterCompensation.value !== 0.0;
+
+    }
+
+    set jitterCompensation(value: boolean) {
+
+        this.fullscreenMaterial.uniforms.jitterCompensation.value = value ? 1.0 : 0.0;
 
     }
 
@@ -570,6 +740,8 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
         if(this.fullscreenMaterial !== undefined) {
 
             this.fullscreenMaterial.uniforms.historyValid.value = false;
+            // The history is discarded, so the next frame has no previous jitter to compensate for
+            this.fullscreenMaterial.uniforms.previousJitter.value.copy(this.jitter);
 
         }
 
@@ -608,7 +780,10 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
 
         // Adding to elements 8 and 9 moves the image by (-x, -y) pixels: a pixel sees what is (x, y) pixels away from
         // its centre in the unjittered image
-        this.fullscreenMaterial.uniforms.jitterOffset.value.set(x, y);
+        const uniforms = this.fullscreenMaterial.uniforms;
+        uniforms.previousJitter.value.copy(this.jitter);
+        this.jitter.set(x, y);
+        uniforms.jitterOffset.value.copy(this.jitter);
 
         this.jittered = true;
 
@@ -686,7 +861,7 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
 
         this.stillFrames = still ? this.stillFrames + 1 : 0;
         uniforms.blend.value = still ? Math.max(1.0 / (1.0 / this._blend + this.stillFrames), this.staticBlend) : this._blend;
-        uniforms.clipHistory.value = !still;
+        uniforms.clipHistory.value = this.clampHistory && !still;
 
         const historyRead = this.history[this.frame % 2];
         const historyWrite = this.history[(this.frame + 1) % 2];

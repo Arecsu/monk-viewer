@@ -4,32 +4,109 @@
   <meta charset="UTF-8" />
   <title>AA lab</title>
   <style>
-    html, body { margin: 0; background: #000; }
+    html, body { margin: 0; background: #000; color: #ddd; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
     canvas { width: 900px; height: 600px; display: block; }
     /* ?live=1: fill the viewport; measurements use the fixed 900x600 */
     body.live { overflow: hidden; }
     body.live canvas { width: 100vw; height: 100vh; }
+
+    #panel {
+      position: fixed; top: 10px; right: 10px; width: 272px;
+      max-height: calc(100vh - 20px); overflow-y: auto; overscroll-behavior: contain;
+      background: rgba(10, 10, 12, 0.9); border: 1px solid #2c2c31; border-radius: 7px;
+      padding: 8px 10px 10px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+    }
+    #panel.hidden { display: none; }
+    #panel header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+    #panel h1 { font-size: 12px; margin: 0; color: #6fd6b0; letter-spacing: 0.06em; font-weight: 600; }
+    #panel h2 {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 0.09em; color: #7c8794;
+      margin: 10px 0 4px; border-bottom: 1px solid #24262b; padding-bottom: 2px;
+    }
+    .row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+    .row > label { flex: 0 0 104px; color: #aab3bd; }
+    .row > input[type="range"] { flex: 1 1 auto; min-width: 0; height: 14px; accent-color: #6fd6b0; }
+    .row > output { flex: 0 0 40px; text-align: right; color: #e8eef4; font-variant-numeric: tabular-nums; }
+    .toggles { display: flex; flex-wrap: wrap; gap: 4px; }
+    .toggles button, .buttons button {
+      font: inherit; font-size: 11px; padding: 3px 7px; border-radius: 4px; cursor: pointer;
+      background: #1a1c20; color: #8b949e; border: 1px solid #2c2f35;
+    }
+    .toggles button.on { background: #14392e; color: #8ff0c9; border-color: #2c6b56; }
+    .toggles button:disabled { opacity: 0.35; cursor: default; }
+    .buttons { display: flex; gap: 5px; margin-top: 6px; }
+    .buttons button:hover, .toggles button:hover { border-color: #4a515b; }
+    #state { margin-top: 8px; padding-top: 6px; border-top: 1px solid #24262b; color: #7f8a95; line-height: 1.5; }
+    #state b { color: #cfe3dc; font-weight: 500; }
+    #copied { color: #6fd6b0; }
+    #show-panel {
+      position: fixed; top: 10px; right: 10px; font: inherit; font-size: 11px; padding: 3px 8px;
+      background: #1a1c20; color: #8b949e; border: 1px solid #2c2f35; border-radius: 4px; cursor: pointer;
+    }
+    #show-panel.hidden { display: none; }
+    select { font: inherit; font-size: 11px; background: #1a1c20; color: #cfd8e3; border: 1px solid #2c2f35; border-radius: 4px; padding: 2px 4px; }
   </style>
 </head>
 <body>
   <canvas id="c"></canvas>
-  <div style="position: fixed; left: 12px; bottom: 12px; display: flex; gap: 8px; align-items: center; color: #0f0; font: 14px monospace;">
-    <button id="toggle-msaa">MSAA</button>
-    <button id="toggle-taa">TAA</button>
-    <button id="toggle-smaa">SMAA</button>
-    <button id="toggle-clamp">Grazing clamp</button>
-    <label>angle <input id="clamp-angle" type="range" min="0.05" max="1" step="0.01"></label>
-    <label>limit <input id="clamp-limit" type="range" min="-2.3" max="0.3" step="0.01"></label>
-    <button id="toggle-static">Static convergence</button>
-    <span id="state"></span>
+  <button id="show-panel" class="hidden">controls</button>
+  <div id="panel">
+    <header>
+      <h1>TAA lab</h1>
+      <div class="toggles"><button id="hide-panel">hide</button></div>
+    </header>
+
+    <h2>Motion</h2>
+    <div class="row">
+      <label for="motion-mode">motion</label>
+      <select id="motion-mode">
+        <option value="still">still</option>
+        <option value="model" selected>model</option>
+        <option value="camera">camera</option>
+        <option value="both">model + camera</option>
+      </select>
+      <output id="motion-speed-out"></output>
+    </div>
+    <div class="row">
+      <label for="motion-speed">speed °/s</label>
+      <input id="motion-speed" type="range" min="0" max="180" step="1" value="45" />
+    </div>
+
+    <h2>Toggles</h2>
+    <div class="toggles" id="toggles"></div>
+
+    <h2>Temporal</h2>
+    <div id="temporal"></div>
+
+    <h2>Spatial</h2>
+    <div id="spatial"></div>
+
+    <h2>Performance</h2>
+    <div id="performance"></div>
+    <div class="row">
+      <label>quick</label>
+      <div class="toggles">
+        <button id="half-res">½ resolution</button>
+      </div>
+    </div>
+
+    <div class="buttons">
+      <button id="reset">reset history</button>
+      <button id="copy">copy settings</button>
+    </div>
+
+    <div id="state"></div>
   </div>
+
   <script type="module">
     import { init } from "/src/renderer.js"
     import * as THREE from "three"
     window.THREE = THREE
 
     // ?mode=taa (default) | taa+smaa | tmr4 (TAA off) | tmr4+smaa; ?live=1 keeps the normal render loop,
-    // M toggles MSAA, T TAA, C static convergence, S SMAA, G grazing clamp (?clamp=0 starts with it off); ?smaa=0 builds the pipeline without the SMAA pass
+    // ?smaa=0 builds the pipeline without the SMAA pass, ?clamp=0 starts with the grazing clamp off.
+    // Hotkeys: M MSAA, T TAA, S SMAA, C static convergence, G grazing clamp, J jitter compensation,
+    // F adaptive filter, R reset history, P hide/show the panel.
     const params = new URLSearchParams(location.search)
     // A literal "+" in a query string decodes as a space
     const mode = (params.get("mode") ?? "taa").replace(" ", "+")
@@ -38,7 +115,7 @@
     if (live) document.body.classList.add("live")
 
     const canvas = document.getElementById("c")
-    window.mgr = init({
+    const mgr = window.mgr = init({
       canvas,
       inputElement: canvas,
       pixelRatio: live ? window.devicePixelRatio : 1,
@@ -58,55 +135,266 @@
         if (!mode.startsWith("taa")) window.mgr.taa.enabled = false
         if (window.mgr.smaaPass) window.mgr.smaaPass.enabled = mode.endsWith("+smaa")
         window.loaded = true
-        if (live) {
-          showState()
-          // After the perf sampling window, which may lower the resolution
-          setTimeout(() => { window.mgr.performantRenderPixelRatio = window.devicePixelRatio }, 1500)
-        }
+        setupPanel()
       },
     })
 
-    const label = document.getElementById("state")
-    const onOff = (enabled) => enabled ? "ON" : "OFF"
-    const showState = () => {
-      const { geometryPass, taa, smaaPass, grazingClamp } = window.mgr
-      label.textContent = `MSAA ${geometryPass.samples}x, TAA ${onOff(taa.enabled)}, ` +
-        `static convergence ${onOff(taa.staticConvergence)}, SMAA ${onOff(smaaPass?.enabled)}, ` +
-        `grazing clamp ${onOff(grazingClamp.enabled)} (angle ${grazingClamp.angle}, limit ${grazingClamp.limit.toPrecision(2)})` +
-        ` — press M / T / C / S / G to toggle`
+    // The lab compares settings, so it must not be auto-tuned mid-comparison. The normal loop is started directly,
+    // skipping the FPS measurement that drops MSAA and the pixel ratio on slower machines.
+    mgr.startPerformanceSamplingLoop = () => {
+      mgr.clock.start()
+      mgr.setupInteraction()
+      mgr.e_loaded(true)
+      mgr.isRendering = true
+      mgr.startRenderLoop()
     }
-    const toggleTAA = () => { window.mgr.taa.enabled = !window.mgr.taa.enabled; showState() }
-    const toggleSMAA = () => { if (window.mgr.smaaPass) window.mgr.smaaPass.enabled = !window.mgr.smaaPass.enabled; showState() }
-    document.getElementById("toggle-taa").addEventListener("click", toggleTAA)
-    const toggleMSAA = () => {
-      const { geometryPass, taa, msaaSamples } = window.mgr
-      geometryPass.samples = geometryPass.samples > 0 ? 0 : msaaSamples
-      taa.reset()
-      showState()
+
+    // --- Motion, so the same pose can be compared while still and while moving --------------------------------
+    // The built-in auto-rotation is replaced by a speed that the panel controls, so still frames converge and
+    // moving frames are reproducible.
+    const motion = { mode: "model", speed: 45 }
+    let lastMotionTime = performance.now()
+    mgr.canAnimate = () => false
+
+    // Manual orbit from the start: the viewer normally needs a click to enter interactive mode, which also swaps in
+    // its own model animations. The panel drives motion explicitly instead.
+    mgr.isInteractive = true
+    mgr.controls.enabled = true
+    mgr.toggleInteractiveMode = () => {}
+
+    // The ratio the page asked for; the resolution slider scales it. Changing it goes through the renderer's own
+    // resize path, so the pipeline, the TAA history and the camera projection all stay consistent.
+    const nativeRatio = live ? window.devicePixelRatio : 1
+    let resolutionScale = 1
+    let resolutionBackup = 1
+    const applyResolutionScale = (scale) => {
+      resolutionScale = scale
+      mgr.performantRenderPixelRatio = nativeRatio * scale
     }
-    document.getElementById("toggle-msaa").addEventListener("click", toggleMSAA)
-    const toggleClamp = () => { window.mgr.grazingClamp.enabled = !window.mgr.grazingClamp.enabled; showState() }
-    document.getElementById("toggle-clamp").addEventListener("click", toggleClamp)
-    // The limit slider is logarithmic: useful limits span 0.005 to 2
-    const sliders = { angle: [(v) => v, (v) => v], limit: [Math.log10, (v) => 10 ** v] }
-    for (const [name, [toSlider, fromSlider]] of Object.entries(sliders)) {
-      const input = document.getElementById(`clamp-${name}`)
-      input.value = toSlider(window.mgr.grazingClamp[name])
-      input.addEventListener("input", () => { window.mgr.grazingClamp[name] = fromSlider(Number(input.value)); showState() })
+
+    const cameraDriven = () => motion.mode === "camera" || motion.mode === "both"
+
+    const applyMotion = () => {
+      const now = performance.now()
+      const dt = Math.min((now - lastMotionTime) / 1000, 0.1)
+      lastMotionTime = now
+      const radians = (motion.speed * Math.PI / 180) * dt
+
+      if (motion.mode === "model" || motion.mode === "both") mgr.model.rotateY(-radians)
+
+      // Drive the orbit goal, not the camera itself: OrbitControls keeps damping towards it and a manual drag adds to
+      // the same goal, so the automatic orbit and the mouse don't fight each other.
+      if (cameraDriven()) mgr.controls._goalSpherical.theta -= radians
     }
-    const toggleStatic = () => { window.mgr.taa.staticConvergence = !window.mgr.taa.staticConvergence; showState() }
-    document.getElementById("toggle-smaa").addEventListener("click", toggleSMAA)
-    document.getElementById("toggle-static").addEventListener("click", toggleStatic)
+
+    const updateScene = mgr.updateScene.bind(mgr)
+    mgr.updateScene = () => { updateScene(); if (window.loaded) applyMotion() }
+
+    // --- Panel ------------------------------------------------------------------------------------------------
+    const $ = (id) => document.getElementById(id)
+    const panel = $("panel")
+    const toggleButtons = new Map()
+    const sliderRows = new Map()
+
+    const T = () => mgr.taa
+    const taaUniform = (name) => T().fullscreenMaterial.uniforms[name].value
+
+    const toggles = [
+      ["taa", "TAA", () => T().enabled, (v) => { T().enabled = v }],
+      ["msaa", "MSAA", () => mgr.geometryPass.samples > 0, (v) => {
+        mgr.geometryPass.samples = v ? mgr.msaaSamples : 0
+        T().reset()
+      }],
+      ["smaa", "SMAA", () => !!mgr.smaaPass?.enabled, (v) => { if (mgr.smaaPass) mgr.smaaPass.enabled = v }],
+      ["clamp", "grazing clamp", () => mgr.grazingClamp.enabled, (v) => { mgr.grazingClamp.enabled = v }],
+      ["static", "static convergence", () => T().staticConvergence, (v) => { T().staticConvergence = v; T().reset() }],
+      ["jitterComp", "jitter compensation", () => T().jitterCompensation, (v) => { T().jitterCompensation = v; T().reset() }],
+      ["motionFilter", "adaptive filter", () => T().motionFilterScale > 0, (v) => { T().motionFilterScale = v ? motionFilterScaleBackup : 0; T().reset() }],
+      ["clampHistory", "clamp history", () => T().clampHistory, (v) => { T().clampHistory = v; T().reset() }],
+    ]
+
+    let motionFilterScaleBackup = 1
+
+    const sliders = [
+      ["temporal", "blend", "new frame", 0.02, 0.8, 0.01, 2,
+        () => T().blend, (v) => { T().blend = v }],
+      ["temporal", "staticBlend", "still frame", 0.002, 0.2, 0.002, 3,
+        () => T().staticBlend, (v) => { T().staticBlend = v }],
+      ["temporal", "varianceGamma", "clamp Γ", 0.25, 4, 0.05, 2,
+        () => T().varianceGamma, (v) => { T().varianceGamma = v }],
+      ["spatial", "filterSharpness", "k still", 0.5, 8, 0.1, 1,
+        () => T().filterSharpness, (v) => { T().filterSharpness = v }],
+      ["spatial", "motionFilterSharpness", "k moving", 0.5, 8, 0.1, 1,
+        () => T().motionFilterSharpness, (v) => { T().motionFilterSharpness = v }],
+      ["spatial", "motionFilterScale", "adaptive rate", 0, 2, 0.05, 2,
+        () => T().motionFilterScale, (v) => {
+          motionFilterScaleBackup = Math.max(v, 0.05)
+          T().motionFilterScale = v
+        }],
+      ["spatial", "jitterScale", "jitter px", 0, 1.5, 0.05, 2,
+        () => T().jitterScale, (v) => { T().jitterScale = v; T().reset() }],
+      ["spatial", "jitterSamples", "jitter samples", 2, 16, 1, 0,
+        () => T().jitterSamples, (v) => { T().jitterSamples = v; T().reset() }],
+      ["performance", "resolution", "render scale", 0.3, 1.5, 0.05, 2,
+        () => resolutionScale, (v) => {
+          // Remember what to return to when the half resolution shortcut is switched off
+          if (v !== 0.5) resolutionBackup = v
+          applyResolutionScale(v)
+        }],
+    ]
+
+    const createToggle = ([key, label, get, set]) => {
+      const button = document.createElement("button")
+      button.textContent = label
+      button.addEventListener("click", () => { if (!button.disabled) { set(!get()); refresh() } })
+      toggleButtons.set(key, { button, get })
+      $("toggles").append(button)
+      return button
+    }
+
+    const createSlider = ([target, key, label, min, max, step, decimals, get, set]) => {
+      const row = document.createElement("div")
+      row.className = "row"
+      const labelEl = document.createElement("label")
+      labelEl.textContent = label
+      labelEl.htmlFor = `sl-${key}`
+      const input = document.createElement("input")
+      input.id = `sl-${key}`
+      input.type = "range"
+      input.min = min
+      input.max = max
+      input.step = step
+      const output = document.createElement("output")
+      input.addEventListener("input", () => { set(Number(input.value)); refresh() })
+      row.append(labelEl, input, output)
+      $(target).append(row)
+      sliderRows.set(key, { input, output, decimals, get })
+    }
+
+    const fps = { frames: 0, since: performance.now(), value: 0 }
+    const tickFps = () => {
+      const now = performance.now()
+      ++fps.frames
+      if (now - fps.since >= 500) {
+        fps.value = Math.round(fps.frames * 1000 / (now - fps.since))
+        fps.frames = 0
+        fps.since = now
+        refresh()
+      }
+      requestAnimationFrame(tickFps)
+    }
+
+    const copyableSettings = () => ({
+      blend: T().blend,
+      staticBlend: T().staticBlend,
+      varianceGamma: T().varianceGamma,
+      filterSharpness: T().filterSharpness,
+      motionFilterSharpness: T().motionFilterSharpness,
+      motionFilterScale: T().motionFilterScale,
+      jitterScale: T().jitterScale,
+      jitterSamples: T().jitterSamples,
+      jitterCompensation: T().jitterCompensation,
+      staticConvergence: T().staticConvergence,
+      clampHistory: T().clampHistory,
+    })
+
+    const refresh = () => {
+      const t = T()
+      const uniforms = t.fullscreenMaterial.uniforms
+
+      for (const [, { button, get }] of toggleButtons) {
+        button.disabled = false
+        button.classList.toggle("on", !!get())
+      }
+      $("half-res").classList.toggle("on", resolutionScale === 0.5)
+      const smaa = toggleButtons.get("smaa").button
+      smaa.disabled = !mgr.smaaPass
+      $("motion-speed-out").textContent = `${motion.speed}°`
+
+      for (const [key, { input, output, decimals, get }] of sliderRows) {
+        const value = get()
+        if (document.activeElement !== input) input.value = value
+        output.textContent = key === "resolution" ? `${value.toFixed(2)}×` :
+          (decimals === 0 ? String(Math.round(value)) : value.toFixed(decimals))
+      }
+
+      const still = t.staticConvergence && t.stillFrames > 0
+      $("state").innerHTML =
+        `<b>${mgr.geometryPass.samples}x</b> MSAA · TAA <b>${t.enabled ? "on" : "off"}</b>` +
+        ` · blend <b>${uniforms.blend.value.toFixed(3)}</b>${still ? ` (still ${t.stillFrames}f)` : ""}` +
+        ` · Γ <b>${t.varianceGamma.toFixed(2)}</b>` +
+        ` · k <b>${t.filterSharpness.toFixed(1)}</b>→<b>${t.motionFilterSharpness.toFixed(1)}</b>` +
+        ` · jitter <b>${t.jitterScale.toFixed(2)}px×${t.jitterSamples}</b><br>` +
+        `jitter comp <b>${t.jitterCompensation ? "on" : "off"}</b>` +
+        ` · clamp <b>${uniforms.clipHistory.value ? "on" : "off"}</b>` +
+        ` · SMAA <b>${mgr.smaaPass?.enabled ? "on" : "off"}</b><br>` +
+        `res <b>${resolutionScale.toFixed(2)}×</b> (${mgr.renderer.domElement.width}×${mgr.renderer.domElement.height})` +
+        ` · <b>${fps.value}</b> fps`
+    }
+
+    const setupPanel = () => {
+      toggles.forEach(createToggle)
+      sliders.forEach(createSlider)
+
+      $("motion-mode").value = motion.mode
+      $("motion-mode").addEventListener("change", (e) => {
+        motion.mode = e.target.value
+        lastMotionTime = performance.now()
+        T().reset()
+        refresh()
+      })
+      $("motion-speed").addEventListener("input", (e) => { motion.speed = Number(e.target.value); refresh() })
+      $("motion-speed").value = motion.speed
+
+      $("reset").addEventListener("click", () => { T().reset(); refresh() })
+      $("half-res").addEventListener("click", () => {
+        const half = resolutionScale === 0.5
+        applyResolutionScale(half ? resolutionBackup : 0.5)
+        refresh()
+      })
+      $("copy").addEventListener("click", async () => {
+        const json = JSON.stringify(copyableSettings(), null, 2)
+        console.log(json)
+        try {
+          await navigator.clipboard.writeText(json)
+          $("state").innerHTML += '<br><span id="copied">settings copied</span>'
+        } catch (error) {
+          $("state").innerHTML += '<br><span id="copied">settings logged to console</span>'
+        }
+      })
+
+      $("hide-panel").addEventListener("click", togglePanel)
+      $("show-panel").addEventListener("click", togglePanel)
+
+      refresh()
+      requestAnimationFrame(tickFps)
+    }
+
+    let panelHidden = false
+    const togglePanel = () => {
+      panelHidden = !panelHidden
+      panel.classList.toggle("hidden", panelHidden)
+      $("show-panel").classList.toggle("hidden", !panelHidden)
+    }
+
     if (live) {
-      // Pin full resolution so the perf auto-tuner doesn't change it mid-comparison
+      // Pin full resolution: there is no auto-tuner in the lab, but the renderer's own pixel ratio logic still applies.
       window.mgr.performantRenderPixelRatio = window.devicePixelRatio
       window.addEventListener("keydown", (e) => {
         const key = e.key.toLowerCase()
-        if (key === "m") toggleMSAA()
-        else if (key === "t") toggleTAA()
-        else if (key === "s") toggleSMAA()
-        else if (key === "c") toggleStatic()
-        else if (key === "g") toggleClamp()
+        const action = {
+          m: "msaa", t: "taa", s: "smaa", c: "static", g: "clamp",
+          j: "jitterComp", f: "motionFilter", r: "reset", p: "panel",
+        }[key]
+        if (action === "panel") return togglePanel()
+        if (action === "reset") return T().reset()
+        const toggle = toggleButtons.get(action)
+        if (toggle && !toggle.button.disabled) {
+          const value = !toggle.get()
+          const def = toggles.find(([name]) => name === action)
+          def[3](value)
+          refresh()
+        }
       })
     }
   </script>
