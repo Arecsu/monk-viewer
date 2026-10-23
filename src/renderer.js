@@ -48,7 +48,7 @@ class ThreeSceneManager {
 		// Always compiled in, specularAA.enabled toggles it at runtime.
 		this.specularAA = new SpecularAntialiasing({ enabled: data.specularAntialiasing ?? true })
 		// Motion blur from TAA's per-pixel motion; motionBlurPass.enabled toggles it at runtime
-		this.motionBlur = data.motionBlur ?? false
+		this.motionBlur = data.motionBlur ?? true
 		this.motionBlurPass = null
 		// Per-object motion from the geometry pass, for TAA and the motion blur. Every mesh is prepared for it; taa.velocityBuffer
 		// switches it on (data.velocityBuffer), otherwise TAA reprojects the model as one rigid body.
