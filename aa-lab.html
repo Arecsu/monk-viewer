@@ -5,10 +5,10 @@
   <title>AA lab</title>
   <style>
     html, body { margin: 0; background: #000; color: #ddd; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
-    canvas { width: 900px; height: 600px; display: block; }
-    /* ?live=1: fill the viewport; measurements use the fixed 900x600 */
-    body.live { overflow: hidden; }
-    body.live canvas { width: 100vw; height: 100vh; }
+    /* Full viewport by default; ?fixed=1 pins the 900x600 framebuffer used for measurement runs */
+    body { overflow: hidden; }
+    canvas { width: 100vw; height: 100vh; display: block; }
+    body.fixed canvas { width: 900px; height: 600px; }
 
     #panel {
       position: fixed; top: 10px; right: 10px; width: 272px;
@@ -64,6 +64,7 @@
         <option value="model" selected>model</option>
         <option value="camera">camera</option>
         <option value="both">model + camera</option>
+        <option value="parts">parts (clips slide)</option>
       </select>
       <output id="motion-speed-out"></output>
     </div>
@@ -74,6 +75,41 @@
 
     <h2>Toggles</h2>
     <div class="toggles" id="toggles"></div>
+
+    <h2>Modern TAA</h2>
+    <div class="row">
+      <label for="preset">preset</label>
+      <select id="preset">
+        <option value="modern">modern</option>
+        <option value="legacy">legacy (previous)</option>
+      </select>
+    </div>
+    <div class="toggles" id="modern-toggles"></div>
+    <div class="row">
+      <label for="box-mode">clamp box</label>
+      <select id="box-mode">
+        <option value="variance">mean ± Γσ</option>
+        <option value="minmax">min/max × Γ</option>
+        <option value="intersection">variance ∩ min/max</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="debug-view">debug view</label>
+      <select id="debug-view">
+        <option value="0">off</option>
+        <option value="1">locks (red)</option>
+        <option value="2">depth: trusted / disoccluded</option>
+        <option value="3">glass mask (blue)</option>
+        <option value="4">motion (red x, green y) + blend (blue)</option>
+      </select>
+    </div>
+    <div id="modern"></div>
+
+    <h2>Motion blur</h2>
+    <div id="blur"></div>
+
+    <h2>Specular AA</h2>
+    <div id="specular"></div>
 
     <h2>Temporal</h2>
     <div id="temporal"></div>
@@ -103,23 +139,29 @@
     import * as THREE from "three"
     window.THREE = THREE
 
-    // ?mode=taa (default) | taa+smaa | tmr4 (TAA off) | tmr4+smaa; ?live=1 keeps the normal render loop,
-    // ?smaa=0 builds the pipeline without the SMAA pass, ?clamp=0 starts with the grazing clamp off.
+    // ?mode=taa (default) | taa+smaa | tmr4 (TAA off) | tmr4+smaa; ?smaa=0 builds the pipeline without the SMAA
+    // pass, ?clamp=0 starts with the grazing clamp off, ?fixed=1 (or the older ?live=0) pins the deterministic
+    // 900x600 @1x framebuffer used for measurement runs. Without it the canvas fills the viewport at the device
+    // pixel ratio.
+    // ?preset=legacy starts with the previous TAA settings instead of the modern ones.
     // Hotkeys: M MSAA, T TAA, S SMAA, C static convergence, G grazing clamp, J jitter compensation,
-    // F adaptive filter, R reset history, P hide/show the panel.
+    // F adaptive filter, N 3x3 neighbourhood, D depth validation, L thin feature locks, E edge blend,
+    // A specular AA, B motion blur, V cycle the debug view, R reset history, P hide/show the panel.
     const params = new URLSearchParams(location.search)
     // A literal "+" in a query string decodes as a space
     const mode = (params.get("mode") ?? "taa").replace(" ", "+")
-    const live = params.get("live") === "1"
+    const fixed = params.get("fixed") === "1" || params.get("live") === "0"
+    const live = !fixed
     window.mode = mode
-    if (live) document.body.classList.add("live")
+    if (fixed) document.body.classList.add("fixed")
 
     const canvas = document.getElementById("c")
     const mgr = window.mgr = init({
       canvas,
       inputElement: canvas,
       pixelRatio: live ? window.devicePixelRatio : 1,
-      modelUrl: "/monk-viewer/False_Enlightenment.glb",
+      // BASE_URL keeps the lab working under any deploy prefix ("/monk-viewer/" in prod, "/" in preview)
+      modelUrl: `${import.meta.env.BASE_URL}False_Enlightenment.glb`,
       envmapUrl: "https://raw.githubusercontent.com/Arecsu/model-viewer/monk/packages/shared-assets/environments/old_bus_depot_2k_HDR.jpg",
       targetDistance: 0.8,
       minDistance: 0.4,
@@ -135,6 +177,7 @@
         if (!mode.startsWith("taa")) window.mgr.taa.enabled = false
         if (window.mgr.smaaPass) window.mgr.smaaPass.enabled = mode.endsWith("+smaa")
         window.loaded = true
+        applyPreset(params.get("preset") === "legacy" ? "legacy" : "modern")
         setupPanel()
       },
     })
@@ -185,7 +228,25 @@
       // Drive the orbit goal, not the camera itself: OrbitControls keeps damping towards it and a manual drag adds to
       // the same goal, so the automatic orbit and the mouse don't fight each other.
       if (cameraDriven()) mgr.controls._goalSpherical.theta -= radians
+
+      // Children moving on their own: only the velocity buffer sees this, the rigid reprojection treats them as part
+      // of the still frame. The speed slider sets the frequency.
+      if (motion.mode === "parts") {
+        partsTime += dt * motion.speed / 45
+        for (const { mesh, base } of clips()) mesh.position.x = base + Math.sin(partsTime * Math.PI * 2) * 0.03
+      } else if (partsTime !== 0) {
+        partsTime = 0
+        for (const { mesh, base } of clips()) mesh.position.x = base
+      }
     }
+
+    let partsTime = 0
+    let clipCache = null
+    const clips = () => clipCache ??= (() => {
+      const list = []
+      mgr.model.traverse((o) => { if (o.isMesh && o.name.startsWith("CLIP")) list.push({ mesh: o, base: o.position.x }) })
+      return list
+    })()
 
     const updateScene = mgr.updateScene.bind(mgr)
     mgr.updateScene = () => { updateScene(); if (window.loaded) applyMotion() }
@@ -216,6 +277,58 @@
       ["clampHistory", "clamp history", () => T().clampHistory, (v) => { T().clampHistory = v; T().reset() }],
     ]
 
+    // The techniques added for thin bright edges in motion. Each one is independent, so they can be compared one by
+    // one against the rest.
+    const modernToggles = [
+      ["neighbourhood", "3×3 clamp", () => T().neighbourhood === 9, (v) => { T().neighbourhood = v ? 9 : 5 }],
+      ["clipTowards", "clip → current", () => T().clipTowardsCurrent, (v) => { T().clipTowardsCurrent = v }],
+      ["depthRejection", "depth validation", () => T().depthRejection, (v) => { T().depthRejection = v; T().reset() }],
+      ["motionRejection", "motion validation", () => T().motionRejection, (v) => { T().motionRejection = v }],
+      ["locks", "thin feature locks", () => T().thinFeatureLocks, (v) => { T().thinFeatureLocks = v; T().reset() }],
+      ["edgeBlend", "edge blend", () => T().edgeAdaptiveBlend, (v) => { T().edgeAdaptiveBlend = v }],
+      ["confidence", "sample confidence", () => T().sampleConfidence, (v) => { T().sampleConfidence = v }],
+      ["velocity", "velocity buffer", () => T().velocityBuffer !== null, (v) => { T().velocityBuffer = v ? mgr.velocityBuffer : null }],
+      ["reactive", "glass mask", () => T().reactiveMask !== null, (v) => setReactiveMask(v)],
+      ["motionBlur", "motion blur", () => !!mgr.motionBlurPass?.enabled, (v) => { mgr.motionBlurPass.enabled = v }],
+      ["specularAA", "specular AA", () => mgr.specularAA.enabled, (v) => { mgr.specularAA.enabled = v }],
+    ]
+
+    // The transparent objects' mask from the resolve pass: no locks, no relaxed clamp, no edge blend on glass
+    const setReactiveMask = (v) => {
+      if (!mgr.resolvePass) return
+      mgr.resolvePass.reactiveMaskEnabled = v
+      T().reactiveMask = v ? mgr.resolvePass.reactiveMask : null
+    }
+
+    // Previous behaviour, and the combination of all the new techniques. The legacy values are the pass defaults.
+    const presets = {
+      legacy: {
+        neighbourhood: 5, boxMode: "variance", clipTowardsCurrent: false, depthRejection: false, motionRejection: false,
+        thinFeatureLocks: false, edgeAdaptiveBlend: false, sampleConfidence: false,
+        trustedGamma: 2.0, depthTolerance: 0.0015, motionTolerance: 1.0, disocclusionBlend: 0.35, lockFrames: 8, lockSimilarity: 0.75,
+        lockStrength: 1.0, lockMaxSpeed: 0, edgeBlend: 0.08, varianceGamma: 1.0, blend: 0.2,
+        specularAA: false, grazingClamp: true, reactive: false, motionBlur: false, velocity: false,
+      },
+      modern: {
+        neighbourhood: 9, boxMode: "variance", clipTowardsCurrent: true, depthRejection: true, motionRejection: true,
+        thinFeatureLocks: true, edgeAdaptiveBlend: true, sampleConfidence: true,
+        trustedGamma: 2.0, depthTolerance: 0.0015, motionTolerance: 1.0, disocclusionBlend: 0.35, lockFrames: 4, lockSimilarity: 0.75,
+        lockStrength: 1.0, lockMaxSpeed: 12, edgeBlend: 0.08, varianceGamma: 1.0, blend: 0.15,
+        specularAA: true, grazingClamp: false, reactive: true, motionBlur: false, velocity: true,
+      },
+    }
+
+    const applyPreset = (name) => {
+      const { specularAA, grazingClamp, reactive, motionBlur, velocity, ...taa } = presets[name]
+      T().velocityBuffer = velocity ? mgr.velocityBuffer : null
+      Object.assign(T(), taa)
+      mgr.specularAA.enabled = specularAA
+      mgr.grazingClamp.enabled = grazingClamp
+      setReactiveMask(reactive)
+      if (mgr.motionBlurPass) mgr.motionBlurPass.enabled = motionBlur
+      T().reset()
+    }
+
     let motionFilterScaleBackup = 1
 
     const sliders = [
@@ -238,6 +351,36 @@
         () => T().jitterScale, (v) => { T().jitterScale = v; T().reset() }],
       ["spatial", "jitterSamples", "jitter samples", 2, 16, 1, 0,
         () => T().jitterSamples, (v) => { T().jitterSamples = v; T().reset() }],
+      ["modern", "trustedGamma", "Γ trusted", 0.5, 6, 0.05, 2,
+        () => T().trustedGamma, (v) => { T().trustedGamma = v }],
+      ["modern", "depthTolerance", "depth tol", 0.0005, 0.03, 0.0005, 4,
+        () => T().depthTolerance, (v) => { T().depthTolerance = v }],
+      ["modern", "motionTolerance", "motion tol px", 0.25, 8, 0.25, 2,
+        () => T().motionTolerance, (v) => { T().motionTolerance = v }],
+      ["modern", "disocclusionBlend", "disocclusion", 0.05, 1, 0.01, 2,
+        () => T().disocclusionBlend, (v) => { T().disocclusionBlend = v }],
+      ["modern", "lockFrames", "lock frames", 1, 32, 1, 0,
+        () => T().lockFrames, (v) => { T().lockFrames = v }],
+      ["modern", "lockSimilarity", "lock similarity", 0.3, 0.98, 0.01, 2,
+        () => T().lockSimilarity, (v) => { T().lockSimilarity = v }],
+      ["modern", "lockStrength", "lock strength", 0, 1, 0.05, 2,
+        () => T().lockStrength, (v) => { T().lockStrength = v }],
+      ["modern", "edgeBlend", "edge blend", 0.01, 0.4, 0.01, 2,
+        () => T().edgeBlend, (v) => { T().edgeBlend = v }],
+      ["modern", "lockMaxSpeed", "lock max px/f", 0, 40, 1, 0,
+        () => T().lockMaxSpeed, (v) => { T().lockMaxSpeed = v }],
+      ["blur", "shutter", "shutter", 0.05, 1, 0.05, 2,
+        () => mgr.motionBlurPass.shutter, (v) => { mgr.motionBlurPass.shutter = v }],
+      ["blur", "maxBlur", "max blur", 0.005, 0.08, 0.005, 3,
+        () => mgr.motionBlurPass.maxBlur, (v) => { mgr.motionBlurPass.maxBlur = v }],
+      ["blur", "blurSamples", "samples", 4, 32, 1, 0,
+        () => mgr.motionBlurPass.samples, (v) => { mgr.motionBlurPass.samples = v }],
+      ["blur", "softDepth", "soft depth", 0.001, 0.1, 0.001, 3,
+        () => mgr.motionBlurPass.softDepth, (v) => { mgr.motionBlurPass.softDepth = v }],
+      ["specular", "specularVariance", "variance", 0, 1, 0.01, 2,
+        () => mgr.specularAA.variance, (v) => { mgr.specularAA.variance = v }],
+      ["specular", "specularThreshold", "threshold", 0, 1, 0.01, 2,
+        () => mgr.specularAA.threshold, (v) => { mgr.specularAA.threshold = v }],
       ["performance", "resolution", "render scale", 0.3, 1.5, 0.05, 2,
         () => resolutionScale, (v) => {
           // Remember what to return to when the half resolution shortcut is switched off
@@ -246,12 +389,12 @@
         }],
     ]
 
-    const createToggle = ([key, label, get, set]) => {
+    const createToggle = ([key, label, get, set], container = "toggles") => {
       const button = document.createElement("button")
       button.textContent = label
       button.addEventListener("click", () => { if (!button.disabled) { set(!get()); refresh() } })
       toggleButtons.set(key, { button, get })
-      $("toggles").append(button)
+      $(container).append(button)
       return button
     }
 
@@ -300,6 +443,29 @@
       staticConvergence: T().staticConvergence,
       clampHistory: T().clampHistory,
       backgroundFastPath: T().backgroundFastPath,
+      neighbourhood: T().neighbourhood,
+      boxMode: T().boxMode,
+      clipTowardsCurrent: T().clipTowardsCurrent,
+      depthRejection: T().depthRejection,
+      depthTolerance: T().depthTolerance,
+      motionRejection: T().motionRejection,
+      motionTolerance: T().motionTolerance,
+      trustedGamma: T().trustedGamma,
+      disocclusionBlend: T().disocclusionBlend,
+      thinFeatureLocks: T().thinFeatureLocks,
+      lockFrames: T().lockFrames,
+      lockSimilarity: T().lockSimilarity,
+      lockStrength: T().lockStrength,
+      edgeAdaptiveBlend: T().edgeAdaptiveBlend,
+      edgeBlend: T().edgeBlend,
+      sampleConfidence: T().sampleConfidence,
+      lockMaxSpeed: T().lockMaxSpeed,
+      velocityBuffer: T().velocityBuffer !== null,
+      reactiveMask: T().reactiveMask !== null,
+      motionBlur: { enabled: mgr.motionBlurPass.enabled, shutter: mgr.motionBlurPass.shutter,
+        maxBlur: mgr.motionBlurPass.maxBlur, samples: mgr.motionBlurPass.samples, softDepth: mgr.motionBlurPass.softDepth },
+      specularAntialiasing: { enabled: mgr.specularAA.enabled, variance: mgr.specularAA.variance, threshold: mgr.specularAA.threshold },
+      grazingSpecularClamp: mgr.grazingClamp.enabled,
     })
 
     const refresh = () => {
@@ -311,6 +477,8 @@
         button.classList.toggle("on", !!get())
       }
       $("half-res").classList.toggle("on", resolutionScale === 0.5)
+      $("box-mode").value = t.boxMode
+      $("debug-view").value = String(t.debugView)
       const smaa = toggleButtons.get("smaa").button
       smaa.disabled = !mgr.smaaPass
       $("motion-speed-out").textContent = `${motion.speed}°`
@@ -332,13 +500,22 @@
         `jitter comp <b>${t.jitterCompensation ? "on" : "off"}</b>` +
         ` · clamp <b>${uniforms.clipHistory.value ? "on" : "off"}</b>` +
         ` · SMAA <b>${mgr.smaaPass?.enabled ? "on" : "off"}</b><br>` +
+        `box <b>${t.neighbourhood === 9 ? "3×3" : "cross"} ${t.boxMode}</b>` +
+        ` · Γ trusted <b>${t.depthRejection ? t.trustedGamma.toFixed(2) : "–"}</b>` +
+        ` · specular AA <b>${mgr.specularAA.enabled ? "on" : "off"}</b><br>` +
         `res <b>${resolutionScale.toFixed(2)}×</b> (${mgr.renderer.domElement.width}×${mgr.renderer.domElement.height})` +
         ` · <b>${fps.value}</b> fps`
     }
 
     const setupPanel = () => {
-      toggles.forEach(createToggle)
+      toggles.forEach((t) => createToggle(t))
+      modernToggles.forEach((t) => createToggle(t, "modern-toggles"))
       sliders.forEach(createSlider)
+
+      $("preset").value = params.get("preset") === "legacy" ? "legacy" : "modern"
+      $("preset").addEventListener("change", (e) => { applyPreset(e.target.value); refresh() })
+      $("box-mode").addEventListener("change", (e) => { T().boxMode = e.target.value; refresh() })
+      $("debug-view").addEventListener("change", (e) => { T().debugView = Number(e.target.value); refresh() })
 
       $("motion-mode").value = motion.mode
       $("motion-mode").addEventListener("change", (e) => {
@@ -389,13 +566,16 @@
         const action = {
           m: "msaa", t: "taa", s: "smaa", c: "static", g: "clamp",
           j: "jitterComp", f: "motionFilter", r: "reset", p: "panel",
+          n: "neighbourhood", d: "depthRejection", l: "locks", e: "edgeBlend", a: "specularAA", v: "debug",
+          b: "motionBlur",
         }[key]
         if (action === "panel") return togglePanel()
         if (action === "reset") return T().reset()
+        if (action === "debug") { T().debugView = (T().debugView + 1) % 5; return refresh() }
         const toggle = toggleButtons.get(action)
         if (toggle && !toggle.button.disabled) {
           const value = !toggle.get()
-          const def = toggles.find(([name]) => name === action)
+          const def = [...toggles, ...modernToggles].find(([name]) => name === action)
           def[3](value)
           refresh()
         }

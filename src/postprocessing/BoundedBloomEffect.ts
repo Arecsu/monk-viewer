@@ -9,6 +9,7 @@ import {
 } from "postprocessing";
 import type { BloomEffectOptions, MipmapBlurPassOptions } from "postprocessing";
 import type { TemporalAAPass } from "./TemporalAAPass.js";
+import type { MotionBlurPass } from "./MotionBlurPass.js";
 
 /**
  * Each stock downsample reaches at most 3 source texels (2-tap offset + bilinear footprint).
@@ -69,8 +70,28 @@ vec4 mainImage(const in vec4 inputColor, const in vec2 uv, const in GData gData)
 `;
 
 /**
- * Stock v7 BloomEffect composition with bounded luminance/downsampling. Upsampling, formats, thresholds,
- * radius and level count are unchanged. No depth-based mask: the source bounds also include the glass.
+ * BoundedBloomEffect options.
+ */
+export interface BoundedBloomEffectOptions extends BloomEffectOptions {
+
+    /**
+     * The output height at which {@link BloomEffectOptions.levels} applies as is. The bloom keeps the same reach,
+     * relative to the screen, at any other resolution.
+     *
+     * @defaultValue 1800
+     */
+    referenceHeight?: number;
+
+}
+
+/**
+ * Stock v7 BloomEffect composition with bounded luminance/downsampling. Upsampling, formats, thresholds and radius
+ * are unchanged. No depth-based mask: the source bounds also include the glass.
+ *
+ * Resolution independent: the stock mip chain halves the input a fixed number of times, so its reach is fixed in
+ * pixels and shrinks on screen as the render scale or the pixel ratio grows. With a radius of 1 the bloom is the
+ * coarsest mip blurred back up, so the reach is the screen over that mip's height. The level count follows the
+ * resolution, and the luminance pass resamples by less than 2x so that the coarsest mip is always the same height.
  */
 export class BoundedBloomEffect extends Effect {
 
@@ -81,15 +102,29 @@ export class BoundedBloomEffect extends Effect {
     private readonly bounds = new Uniform(new Vector4(0, 0, 1, 1));
     private readonly boundsSource: TemporalAAPass | null;
 
+    /**
+     * A motion blur pass between TAA and bloom. Its output is black outside its own bounds, which only extend TAA's.
+     */
+
+    motionBlurSource: MotionBlurPass | null = null;
+
+    /** @see {@link BoundedBloomEffectOptions.referenceHeight} */
+    referenceHeight: number;
+
+    private readonly referenceLevels: number;
+
     constructor(boundsSource: TemporalAAPass | null, {
         luminanceThreshold = 1,
         luminanceSmoothing = 0.03,
         intensity = 1,
+        referenceHeight = 1800,
         ...blurOptions
-    }: BloomEffectOptions = {}) {
+    }: BoundedBloomEffectOptions = {}) {
 
         super("BloomEffect");
         this.boundsSource = boundsSource;
+        this.referenceHeight = referenceHeight;
+        this.referenceLevels = blurOptions.levels ?? 8;
         this.fragmentShader = fragmentShader;
         this.blendMode.blendFunction = new AddBlendFunction();
 
@@ -128,28 +163,71 @@ export class BoundedBloomEffect extends Effect {
 
     }
 
+    /**
+     * Keeps the coarsest mip at referenceHeight / 2^levels pixels, see the class description.
+     */
+    private updateScale(): void {
+
+        const height = this.resolution.height;
+        if(height <= 0) return;
+
+        const target = this.referenceHeight / 2 ** this.referenceLevels;
+        const luminance = this.luminancePass;
+        const blur = this.mipmapBlurPass;
+        // Without the luminance pass the chain reads the input directly and can only round to the nearest level
+        const levels = Math.max(luminance.enabled ? Math.floor(Math.log2(height / target)) :
+            Math.round(Math.log2(height / target)), 1);
+        // In (0.5, 1]: a bilinear resample by less than 2x still reads every source texel
+        const scale = luminance.enabled ? Math.min(target * 2 ** levels / height, 1) : 1;
+
+        const resized = luminance.resolution.scale !== scale;
+        if(resized) luminance.resolution.scale = scale;
+
+        if(blur.levels !== levels) {
+            blur.levels = levels;
+        } else if(resized) {
+            // The chain sizes its mips from its input texture, which only the luminance pass knows has changed
+            (blur as unknown as { onResolutionChange(): void }).onResolutionChange();
+        }
+
+    }
+
     override render(): void {
 
         const bounds = this.bounds.value.set(0, 0, 1, 1);
         const source = this.boundsSource;
-        const sourceBuffer = source?.output.defaultBuffer?.value;
+        const blur = this.motionBlurSource;
         const input = this.input.defaultBuffer?.value;
+        const blurBuffer = blur?.output.defaultBuffer?.value;
+        let sourceBuffer = source?.output.defaultBuffer?.value;
 
         // Only TAA's actual output is certified black outside these bounds. Disabling TAA, inserting another pass,
         // fog or a different background must never crop new signal. TAA already expands unsafe cases to full screen.
-        if(this.backgroundFastPath && source?.enabled && source.backgroundFastPath &&
+        // The motion blur extends them by its reach, and keeps them full screen unless it read TAA's output.
+        if(this.backgroundFastPath && blur?.enabled && blurBuffer != null && blurBuffer.texture === input) {
+            sourceBuffer = blurBuffer;
+            bounds.copy(blur.backgroundBounds);
+        } else if(this.backgroundFastPath && source?.enabled && source.backgroundFastPath &&
             sourceBuffer != null && sourceBuffer.texture === input) {
+            bounds.copy(source.fullscreenMaterial.uniforms.backgroundBounds.value);
+        } else {
+            sourceBuffer = undefined;
+        }
+
+        if(sourceBuffer != null) {
             const { width, height } = sourceBuffer;
             if(width > 0 && height > 0) {
-                bounds.copy(source.fullscreenMaterial.uniforms.backgroundBounds.value);
                 // Luminance may run at a different resolution: linear sampling reaches one original source texel.
                 bounds.x -= 1 / width;
                 bounds.y -= 1 / height;
                 bounds.z += 1 / width;
                 bounds.w += 1 / height;
+            } else {
+                bounds.set(0, 0, 1, 1);
             }
         }
 
+        this.updateScale();
         if(this.luminancePass.enabled) this.luminancePass.render();
         this.mipmapBlurPass.render();
 

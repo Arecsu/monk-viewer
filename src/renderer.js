@@ -7,6 +7,9 @@ import { TonemappedResolvePass } from "./postprocessing/TonemappedResolvePass.js
 import { TemporalAAPass } from "./postprocessing/TemporalAAPass.js"
 import { SMAAEffect } from "./postprocessing/SMAAEffect.js"
 import { GrazingSpecularClamp } from "./postprocessing/GrazingSpecularClamp.js"
+import { SpecularAntialiasing } from "./postprocessing/SpecularAntialiasing.js"
+import { MotionBlurPass } from "./postprocessing/MotionBlurPass.js"
+import { VelocityBuffer } from "./postprocessing/VelocityBuffer.js"
 import { BoundedBloomEffect } from "./postprocessing/BoundedBloomEffect.js"
 import { RenderPipeline, ClearPass, GeometryPass, EffectPass, ToneMappingEffect, ToneMapping } from "postprocessing"
 // import HDRIMAP from "./envmaps/old_bus_depot_4k_blur.jpg?url"
@@ -40,7 +43,17 @@ class ThreeSceneManager {
 		this.smaaPass = null
 		// Dims the HDR reflections of edge-on surfaces, which alias into thin bright lines. Always compiled in,
 		// grazingClamp.enabled toggles it at runtime.
-		this.grazingClamp = new GrazingSpecularClamp({ enabled: data.grazingSpecularClamp ?? true })
+		this.grazingClamp = new GrazingSpecularClamp({ enabled: data.grazingSpecularClamp ?? false })
+		// Widens the roughness where the normal varies within a pixel, the prefiltered alternative to the grazing clamp.
+		// Always compiled in, specularAA.enabled toggles it at runtime.
+		this.specularAA = new SpecularAntialiasing({ enabled: data.specularAntialiasing ?? true })
+		// Motion blur from TAA's per-pixel motion; motionBlurPass.enabled toggles it at runtime
+		this.motionBlur = data.motionBlur ?? false
+		this.motionBlurPass = null
+		// Per-object motion from the geometry pass, for TAA and the motion blur. Every mesh is prepared for it; taa.velocityBuffer
+		// switches it on (data.velocityBuffer), otherwise TAA reprojects the model as one rigid body.
+		this.velocityBuffer = new VelocityBuffer()
+		this.useVelocityBuffer = data.velocityBuffer ?? true
 
 		this.pixelRatioVariation = 1 // this to handle screen DPI changes
 
@@ -213,10 +226,24 @@ class ThreeSceneManager {
 		return new Promise((resolve, reject) => {
 			this.pipeline = new RenderPipeline(this.renderer)
 			// Smooths what MSAA quantizes into steps, e.g. sub-pixel edges sliding across pixel rows.
-			// The defaults are the settings tuned in aa-lab.html: 1px jitter over 8 Halton positions, a sharp Gaussian
-			// reconstruction filter (k 5), contrast clamp width 1, static convergence, history clamping and the adaptive
-			// filter enabled. Jitter compensation stays off: with it, still frames keep the 1px jitter visible.
-			this.taa = new TemporalAAPass({ exposure: this.renderer.toneMappingExposure, backgroundFastPath: true })
+			// The settings are aa-lab.html's "modern" preset: 1px jitter over 8 Halton positions, a sharp Gaussian
+			// reconstruction filter (k 5), a 3x3 variance clamp clipped towards the current colour, history validated by
+			// depth and by motion, thin feature locks, edge-adaptive blend and sample confidence. Jitter compensation stays
+			// off: with it, still frames keep the 1px jitter visible.
+			this.taa = new TemporalAAPass({
+				exposure: this.renderer.toneMappingExposure,
+				backgroundFastPath: true,
+				blend: 0.15,
+				neighbourhood: 9,
+				clipTowardsCurrent: true,
+				depthRejection: true,
+				motionRejection: true,
+				thinFeatureLocks: true,
+				lockFrames: 4,
+				lockMaxSpeed: 12,
+				edgeAdaptiveBlend: true,
+				sampleConfidence: true,
+			})
 			this.taa.trackedObject = this.model
 			this.pipeline.add(this.taa.jitterPass)
 			const clearPass = new ClearPass()
@@ -228,13 +255,28 @@ class ThreeSceneManager {
 				samples: this.msaaSamples,
 			})
 			this.pipeline.add(this.geometryPass)
+			this.velocityBuffer.register(this.geometryPass, clearPass)
+			if (this.useVelocityBuffer) this.taa.velocityBuffer = this.velocityBuffer
 			if (this.msaaSamples > 0) {
 				// Resolve MSAA in tonemapped space so bright HDR edges get antialiased
-				this.resolvePass = new TonemappedResolvePass({ exposure: this.renderer.toneMappingExposure })
+				// The reactive mask keeps the glass's reflections and scratches out of the thin feature locks
+				this.resolvePass = new TonemappedResolvePass({ exposure: this.renderer.toneMappingExposure, reactiveMask: true })
+				this.taa.reactiveMask = this.resolvePass.reactiveMask
 				clearPass.clearValues.color = this.resolvePass.encodeColor(this.scene.background)
 				this.pipeline.add(this.resolvePass)
 			}
 			this.pipeline.add(this.taa)
+			this.motionBlurPass = new MotionBlurPass(this.taa)
+			this.motionBlurPass.enabled = this.motionBlur
+			this.pipeline.add(this.motionBlurPass)
+			const bloom = new BoundedBloomEffect(this.taa, {
+				luminanceSmoothing: 0.4,
+				intensity: 0.3,
+				radius: 1,
+				luminanceThreshold: 0.1,
+				levels: 8,
+			})
+			bloom.motionBlurSource = this.motionBlurPass
 			const effects = new EffectPass(
 				// new SMAAEffect(),
 				// new FXAAEffect({
@@ -243,13 +285,7 @@ class ThreeSceneManager {
 				// 	subpixelQuality: 1.0,
 				// 	samples: 12,
 				// }),
-				new BoundedBloomEffect(this.taa, {
-					luminanceSmoothing: 0.4,
-					intensity: 0.3,
-					radius: 1,
-					luminanceThreshold: 0.1,
-					levels: 8,
-				}),
+				bloom,
 				new ToneMappingEffect({
 					toneMapping: ToneMapping.REINHARD,
 				}),
@@ -447,9 +483,12 @@ class ThreeSceneManager {
 						child.material.needsUpdate = true
 					}
 				});
+				// First: it gives every mesh its own material, which the other patches then apply to
+				this.velocityBuffer.prepare(this.model)
 				// Before scene.add(), so the GeometryPass shader plugin wraps the encoding hook
 				this.resolvePass?.prepare(this.model)
 				this.grazingClamp.prepare(this.model)
+				this.specularAA.prepare(this.model)
 				if (this.taa) this.taa.trackedObject = this.model
 
 					this.optimizeModelTextures(this.model)

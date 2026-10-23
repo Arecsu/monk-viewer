@@ -1,12 +1,15 @@
 import {
     Box3,
     Color,
+    DataTexture,
     HalfFloatType,
     Matrix4,
+    NearestFilter,
     Object3D,
     PerspectiveCamera,
     RGBAFormat,
     RGBFormat,
+    Texture,
     Uniform,
     Vector2,
     Vector4,
@@ -14,6 +17,7 @@ import {
 } from "three";
 import { FullscreenMaterial, GBuffer, Pass } from "postprocessing";
 import { TemporalAABounds } from "./TemporalAABounds.js";
+import { VELOCITY, VelocityBuffer } from "./VelocityBuffer.js";
 
 /**
  * Temporal antialiasing.
@@ -42,7 +46,14 @@ import { TemporalAABounds } from "./TemporalAABounds.js";
  * image. Compensating instead tracks the surface sub-pixel by sub-pixel, which leaves the jitter visible in still
  * frames and only pays off with a much lower {@link jitterScale}.
  *
+ * In motion, the contrast clamp is what turns thin bright edges back into steps: a sub-pixel line is missed by some
+ * jitter positions, and the clamp then erases it from the history. The opt-in options attack that from several sides:
+ * a 3x3 neighbourhood, clipping towards the current colour, depth validation of the history so that only disoccluded
+ * pixels get the tight clamp, thin feature locks, lower blend on edges and per-frame sample confidence. See
+ * {@link TemporalAAPassOptions}.
+ *
  * @see https://de45xmedrsdbp.cloudfront.net/Resources/files/TemporalAA_small-59732822.pdf
+ * @see http://behindthepixels.io/assets/files/TemporalAA.pdf
  * @see https://github.com/playdeadgames/temporal
  */
 
@@ -53,8 +64,16 @@ const fragmentShader = /* glsl */ `
 // The pass output, written along with the history. See TemporalAAPass.history.
 layout(location = 1) out mediump vec4 out_Output;
 
+// Per-pixel state carried along with the history: x is the view depth of the surface, 0 for the background, y is the
+// thin feature lock, zw is the screen motion of the pixel since the previous frame in pixels, for the motion blur. See
+// TemporalAAPass.history.
+layout(location = 2) out highp vec4 out_State;
+
 uniform highp sampler2D depthBuffer;
+uniform highp sampler2D velocityBuffer;
+uniform bool useVelocityBuffer;
 uniform sampler2D historyBuffer;
+uniform highp sampler2D stateBuffer;
 
 uniform mat4 inverseViewProjectionJittered;
 uniform mat4 viewProjection;
@@ -70,10 +89,32 @@ uniform float blend;
 uniform float varianceGamma;
 uniform bool historyValid;
 uniform bool clipHistory;
+uniform bool moving;
 uniform float filterSharpness;
 uniform float motionFilterSharpness;
 uniform float motionFilterScale;
 uniform float jitterCompensation;
+
+uniform int neighbourCount;
+uniform int boxMode;
+uniform bool clipTowardsCurrent;
+uniform bool depthRejection;
+uniform float depthTolerance;
+uniform bool motionRejection;
+uniform float motionTolerance;
+uniform float trustedGamma;
+uniform float disocclusionBlend;
+uniform bool thinFeatureLocks;
+uniform float lockStep;
+uniform float lockMaxSpeed;
+uniform float lockSimilarity;
+uniform float lockStrength;
+uniform bool edgeAdaptiveBlend;
+uniform float edgeBlend;
+uniform bool sampleConfidence;
+uniform highp sampler2D reactiveMask;
+uniform float reactiveStrength;
+uniform int debugView;
 
 in vec2 vUv;
 
@@ -157,13 +198,36 @@ vec3 clipToBox(vec3 boxMin, vec3 boxMax, vec3 q) {
 
 }
 
-// Where the surface seen at uv was on screen in the previous frame.
-vec2 reproject(vec2 uv, float depth) {
+// Moves q along the segment towards the current colour until it lies inside the box (Pedersen 2016). Unlike the box
+// centre, the current colour is what the pixel actually shows, so the clipped history keeps its hue and stays on the
+// right side of an edge.
+vec3 clipTowards(vec3 boxMin, vec3 boxMax, vec3 target, vec3 q) {
+
+	target = clamp(target, boxMin, boxMax);
+	vec3 r = q - target;
+	vec3 rMax = boxMax - target;
+	vec3 rMin = boxMin - target;
+	const float EPSILON = 1e-7;
+
+	if(r.x > rMax.x + EPSILON) r *= rMax.x / r.x;
+	if(r.y > rMax.y + EPSILON) r *= rMax.y / r.y;
+	if(r.z > rMax.z + EPSILON) r *= rMax.z / r.z;
+	if(r.x < rMin.x - EPSILON) r *= rMin.x / r.x;
+	if(r.y < rMin.y - EPSILON) r *= rMin.y / r.y;
+	if(r.z < rMin.z - EPSILON) r *= rMin.z / r.z;
+
+	return target + r;
+
+}
+
+// Where the surface seen at uv was on screen in the previous frame (xy), its view depth then (z) and now (w). The depths
+// are 0 for the background.
+vec4 reproject(vec2 uv, float depth) {
 
 	if(depth >= 1.0) {
 
 		// Background, static
-		return uv;
+		return vec4(uv, 0.0, 0.0);
 
 	}
 
@@ -171,24 +235,46 @@ vec2 reproject(vec2 uv, float depth) {
 	world /= world.w;
 
 	vec4 current = viewProjection * world;
+
+	if(useVelocityBuffer) {
+
+		// Per-object motion and depth change from the geometry pass, see VelocityBuffer
+		vec4 velocity = texture(velocityBuffer, uv);
+		return vec4(uv - velocity.xy, current.w * (1.0 + velocity.z), current.w);
+
+	}
+
 	vec4 previous = previousViewProjection * (objectMotion * world);
 	vec2 velocity = (current.xy / current.w - previous.xy / previous.w) * 0.5;
 
-	return uv - velocity;
+	// For a perspective projection, clip w is the view depth
+	return vec4(uv - velocity, previous.w, current.w);
 
 }
 
-// Centre and the 4 direct neighbours. A full 3x3 costs 8 more fetches for no measurable gain here.
-const ivec2 NEIGHBOURS[5] = ivec2[5](ivec2(0, 0), ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));
+// Ratio of two encoded lumas. Small absolute differences count as alike too, so that the faint gradients of near black
+// (glass over the background, bloom-free falloff) don't lock and keep their history as trails.
+bool similar(float a, float b) {
+
+	return abs(a - b) < 0.06 || min(a, b) / max(a, b) >= lockSimilarity;
+
+}
+
+// Centre, the 4 direct neighbours, then the 4 diagonals. neighbourCount selects the cross (5) or the full 3x3 (9).
+const ivec2 NEIGHBOURS[9] = ivec2[9](
+	ivec2(0, 0), ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1),
+	ivec2(-1, -1), ivec2(1, -1), ivec2(-1, 1), ivec2(1, 1)
+);
 
 void main() {
 
 	// The viewer is one bounded rigid object against black, before bloom. Outside its padded history footprint
-	// there has never been a signal to reconstruct. Write BOTH attachments so stale history cannot return later.
+	// there has never been a signal to reconstruct. Write ALL attachments so stale history cannot return later.
 	if(any(lessThan(vUv, backgroundBounds.xy)) || any(greaterThan(vUv, backgroundBounds.zw))) {
 
 		out_Color = vec4(0.0, 0.0, 0.0, 1.0);
 		out_Output = out_Color;
+		out_State = vec4(0.0);
 		return;
 
 	}
@@ -198,7 +284,7 @@ void main() {
 	vec2 closestUv = vUv;
 	float closestDepth = 1.0;
 
-	for(int i = 0; i < 5; ++i) {
+	for(int i = 0; i < neighbourCount; ++i) {
 
 		vec2 uv = vUv + vec2(NEIGHBOURS[i]) * texelSize;
 		float d = texture(depthBuffer, uv).r;
@@ -212,7 +298,11 @@ void main() {
 
 	}
 
-	vec2 historyUv = vUv + (reproject(closestUv, closestDepth) - closestUv);
+	vec4 motionData = reproject(closestUv, closestDepth);
+	vec2 historyUv = vUv + (motionData.xy - closestUv);
+
+	// The motion this pixel is reprojected with, in pixels. Stored for the motion blur and the motion validation below.
+	vec2 velocity = (closestUv - motionData.xy) / texelSize;
 
 	// The history holds a jittered image: the texel that contains this surface in the previous frame is offset by the
 	// difference between the two jitter positions. Without it the lookup lands up to two pixels off and the contrast
@@ -223,16 +313,34 @@ void main() {
 	float motion = length((historyUv - vUv) / texelSize);
 	float sharpness = mix(filterSharpness, motionFilterSharpness, clamp(motion * motionFilterScale, 0.0, 1.0));
 
+	vec3 samples[9];
 	vec3 m1 = vec3(0.0);
 	vec3 m2 = vec3(0.0);
+	vec3 minColor = vec3(1e9);
+	vec3 maxColor = vec3(-1e9);
 	vec3 filtered = vec3(0.0);
 	float filterWeight = 0.0;
+	float lumaMin = 1e9;
+	float lumaMax = -1e9;
 
-	for(int i = 0; i < 5; ++i) {
+	// All 9 are fetched: the thin feature test and the edge contrast always look at the full 3x3
+	for(int i = 0; i < 9; ++i) {
 
 		vec3 c = sampleCurrent(NEIGHBOURS[i]);
+		samples[i] = c;
+		lumaMin = min(lumaMin, c.x);
+		lumaMax = max(lumaMax, c.x);
+
+		if(i >= neighbourCount) {
+
+			continue;
+
+		}
+
 		m1 += c;
 		m2 += c * c;
+		minColor = min(minColor, c);
+		maxColor = max(maxColor, c);
 
 		// Reconstruct the pixel from the jittered samples around it, weighted by their distance to the pixel centre.
 		// Without it, the history converges to a box filter, which leaves faint steps on thin near-horizontal lines.
@@ -245,6 +353,34 @@ void main() {
 	}
 
 	vec3 current = filtered / filterWeight;
+	float currentDepth = motionData.w;
+
+	// Glass and other transparent surfaces (FSR 2 "reactive mask"): their reflections and scratches move on their own,
+	// and the depth behind them says nothing about them. See TonemappedResolvePass.reactiveMask.
+	float reactive = 0.0;
+
+	if(reactiveStrength > 0.0) {
+
+		ivec2 coord = min(ivec2(gl_FragCoord.xy), textureSize(reactiveMask, 0) - 1);
+		reactive = reactiveStrength * texelFetch(reactiveMask, coord, 0).r;
+
+	}
+
+	// Thin feature: no 2x2 quad around the pixel looks like it (FSR 2). A sub-pixel line touches every quad it crosses
+	// with a different colour on at least one side, a solid area or a wide edge doesn't. The contrast floor keeps
+	// gradients and noise in dark areas from locking.
+	float thin = 0.0;
+
+	if(thinFeatureLocks) {
+
+		float y = samples[0].x;
+		bool quad0 = similar(y, samples[1].x) && similar(y, samples[3].x) && similar(y, samples[5].x);
+		bool quad1 = similar(y, samples[2].x) && similar(y, samples[3].x) && similar(y, samples[6].x);
+		bool quad2 = similar(y, samples[1].x) && similar(y, samples[4].x) && similar(y, samples[7].x);
+		bool quad3 = similar(y, samples[2].x) && similar(y, samples[4].x) && similar(y, samples[8].x);
+		thin = (!(quad0 || quad1 || quad2 || quad3) && lumaMax - lumaMin > 0.05) ? 1.0 : 0.0;
+
+	}
 
 	bool offscreen = any(lessThan(historyUv, vec2(0.0))) || any(greaterThan(historyUv, vec2(1.0)));
 
@@ -252,24 +388,152 @@ void main() {
 
 		out_Color = vec4(decode(YCoCgToRGB(current)), 1.0);
 		out_Output = out_Color;
+		out_State = vec4(currentDepth, thin * (1.0 - reactive), velocity);
 		return;
 
 	}
 
-	vec3 mean = m1 / 5.0;
-	vec3 sigma = sqrt(max(m2 / 5.0 - mean * mean, 0.0)) * varianceGamma;
+	// Geometric validation (Nehab et al. 2007): the reprojection is exact, so whether the history texel held this same
+	// surface is a reliable, per-pixel answer, unlike the colour clamp. Only the texel the lookup lands in counts:
+	// accepting any of its neighbours lets the pixels right behind a moving part pass on the strength of print uncovered
+	// a frame earlier, and the relaxed clamp then leaves a copy of the part's edge behind every frame. Silhouettes don't
+	// need the leniency, the stored depth is dilated by a pixel in both frames.
+	ivec2 stateSize = textureSize(stateBuffer, 0);
+	vec4 state = texelFetch(stateBuffer, clamp(ivec2(historyUv * vec2(stateSize)), ivec2(0), stateSize - 1), 0);
+	float match = 1.0;
 
-	vec3 history = RGBToYCoCg(encode(sampleHistory(historyUv)));
+	if(depthRejection) {
 
-	if(clipHistory) {
-
-		history = clipToBox(mean - sigma, mean + sigma, history);
+		float expected = motionData.z;
+		bool same = expected > 0.0 ? abs(state.x - expected) <= depthTolerance * expected : state.x == 0.0;
+		match = same ? 1.0 : 0.0;
 
 	}
 
-	vec3 result = mix(history, current, blend);
+	// Motion validation (motion vector divergence, as in FSR 2 and TSR): a surface's own motion barely changes from one
+	// frame to the next, so history that moved very differently belongs to something else. It catches what depth can't:
+	// a thin part lying flush on another, e.g. a clip on the back plate, less than a millimetre apart, slides off and
+	// the plate it uncovers would otherwise keep the clip's history.
+	if(motionRejection) {
+
+		float divergence = length(velocity - state.zw);
+		match = divergence <= motionTolerance + 0.25 * length(velocity) ? match : 0.0;
+
+	}
+
+	// Locks follow the surface and fade linearly over lockFrames, so they end instead of leaving a long faint tail. A
+	// disocclusion drops them: it's another surface. So does glass: whatever is thin there moves on its own.
+	float lock = thin;
+
+	if(thinFeatureLocks && match > 0.0) {
+
+		lock = max(state.y - lockStep, thin);
+
+	}
+
+	lock *= 1.0 - reactive;
+
+	// Fast motion: whatever a lock keeps is visibly out of date, and the motion blur hides the steps anyway
+	float speedFade = lockMaxSpeed > 0.0 ? 1.0 - smoothstep(0.5 * lockMaxSpeed, lockMaxSpeed, motion) : 1.0;
+	float lockWeight = lock * lockStrength * match * speedFade;
+
+	// The background has no depth to validate against: the glass doesn't write depth, so a "background" pixel can be
+	// covered by moving glass. Only matched surfaces get the relaxed clamp.
+	bool trusted = depthRejection && currentDepth > 0.0 && match > 0.0;
+	float gamma = trusted ? mix(trustedGamma, varianceGamma, reactive) : varianceGamma;
+
+	float n = float(neighbourCount);
+	vec3 mean = m1 / n;
+	vec3 sigma = sqrt(max(m2 / n - mean * mean, 0.0)) * gamma;
+	vec3 boxMin = mean - sigma;
+	vec3 boxMax = mean + sigma;
+
+	if(boxMode == 1) {
+
+		// Min/max, scaled around its centre so that the trusted width still applies
+		vec3 center = 0.5 * (maxColor + minColor);
+		vec3 extents = 0.5 * (maxColor - minColor) * gamma;
+		boxMin = center - extents;
+		boxMax = center + extents;
+
+	} else if(boxMode == 2) {
+
+		// Variance clipping can reach past the colours actually present, the intersection can't (Salvi 2016)
+		boxMin = max(boxMin, minColor);
+		boxMax = min(boxMax, maxColor);
+
+	}
+
+	vec3 rawHistory = RGBToYCoCg(encode(sampleHistory(historyUv)));
+	vec3 history = rawHistory;
+
+	if(clipHistory) {
+
+		history = clipTowardsCurrent ? clipTowards(boxMin, boxMax, current, rawHistory) :
+			clipToBox(boxMin, boxMax, rawHistory);
+
+		// A locked thin feature keeps its history even when this frame's samples missed it, which is what the clamp
+		// would otherwise turn into a broken, stepped line (Yang et al. 2020, fig. 9).
+		history = mix(history, rawHistory, lockWeight);
+
+	}
+
+	float alpha = blend;
+
+	if(moving) {
+
+		if(edgeAdaptiveBlend) {
+
+			// High contrast neighbourhoods accumulate longer (Malan 2012): that's where the jitter shows the most, and
+			// a matched surface's history there is valid
+			float contrast = smoothstep(0.05, 0.35, lumaMax - lumaMin);
+			alpha = mix(alpha, min(alpha, edgeBlend), contrast * match * (1.0 - reactive));
+
+		}
+
+		if(sampleConfidence) {
+
+			// Frames whose sample landed far from the pixel centre count less (UE4, beta = max of the filter weights).
+			// Blackman-Harris fit, so the worst jitter position still weighs about a third.
+			alpha *= max(exp(-2.29 * dot(jitterOffset, jitterOffset)), 0.25);
+
+		}
+
+		if((depthRejection || motionRejection) && match == 0.0) {
+
+			alpha = max(alpha, disocclusionBlend);
+
+		}
+
+	}
+
+	vec3 result = mix(history, current, alpha);
+
 	out_Color = vec4(decode(YCoCgToRGB(result)), 1.0);
 	out_Output = out_Color;
+	out_State = vec4(currentDepth, lock, velocity);
+
+	if(debugView == 1) {
+
+		// Effective locks in red. Dim: the output feeds the bloom
+		out_Output.rgb = mix(out_Output.rgb, vec3(0.6, 0.0, 0.0), lockWeight * 0.8);
+
+	} else if(debugView == 2 && (currentDepth > 0.0 || match == 0.0)) {
+
+		// Depth validation: trusted surfaces in green, disocclusions in red
+		out_Output.rgb = mix(out_Output.rgb, trusted ? vec3(0.0, 0.08, 0.0) : vec3(0.6, 0.0, 0.0), 0.5);
+
+	} else if(debugView == 3) {
+
+		// Reactive mask in blue
+		out_Output.rgb = mix(out_Output.rgb, vec3(0.0, 0.05, 0.6), reactive * 0.7);
+
+	} else if(debugView == 4) {
+
+		// Own motion in pixels per frame: red right, green up (negatives as their magnitude), blue = blend
+		out_Output.rgb = vec3(abs(velocity) * 0.1, alpha);
+
+	}
 
 }
 `;
@@ -283,6 +547,8 @@ class TemporalAAMaterial extends FullscreenMaterial {
             fragmentShader,
             uniforms: {
                 depthBuffer: new Uniform(null),
+                velocityBuffer: new Uniform(BLACK),
+                useVelocityBuffer: new Uniform(false),
                 historyBuffer: new Uniform(null),
                 inverseViewProjectionJittered: new Uniform(new Matrix4()),
                 viewProjection: new Uniform(new Matrix4()),
@@ -300,7 +566,29 @@ class TemporalAAMaterial extends FullscreenMaterial {
                 filterSharpness: new Uniform(5.0),
                 motionFilterSharpness: new Uniform(5.0),
                 motionFilterScale: new Uniform(1.0),
-                jitterCompensation: new Uniform(0.0)
+                jitterCompensation: new Uniform(0.0),
+                stateBuffer: new Uniform(null),
+                moving: new Uniform(true),
+                neighbourCount: new Uniform(5),
+                boxMode: new Uniform(0),
+                clipTowardsCurrent: new Uniform(false),
+                depthRejection: new Uniform(false),
+                depthTolerance: new Uniform(0.0015),
+                motionRejection: new Uniform(false),
+                motionTolerance: new Uniform(1.0),
+                trustedGamma: new Uniform(2.0),
+                disocclusionBlend: new Uniform(0.35),
+                thinFeatureLocks: new Uniform(false),
+                lockStep: new Uniform(0.125),
+                lockMaxSpeed: new Uniform(0.0),
+                reactiveMask: new Uniform(BLACK),
+                reactiveStrength: new Uniform(0.0),
+                lockSimilarity: new Uniform(0.75),
+                lockStrength: new Uniform(1.0),
+                edgeAdaptiveBlend: new Uniform(false),
+                edgeBlend: new Uniform(0.08),
+                sampleConfidence: new Uniform(false),
+                debugView: new Uniform(0)
             }
         });
 
@@ -497,7 +785,199 @@ export interface TemporalAAPassOptions {
 
     backgroundFastPath?: boolean;
 
+    /**
+     * The neighbourhood of the contrast clamp and the reconstruction filter: the 5-tap cross or the full 3x3. The
+     * cross misses diagonal neighbours, so on the steps of a thin diagonal line the box collapses and clips the history
+     * of the line away.
+     *
+     * @defaultValue 5
+     */
+
+    neighbourhood?: 5 | 9;
+
+    /**
+     * The shape of the clamp box: mean ± Γσ (Salvi 2016), the min/max of the neighbourhood scaled by Γ around its
+     * centre, or the intersection of both.
+     *
+     * @defaultValue "variance"
+     */
+
+    boxMode?: TemporalAABoxMode;
+
+    /**
+     * Controls whether the history is clipped towards the current colour instead of the box centre (Pedersen 2016).
+     *
+     * @defaultValue false
+     */
+
+    clipTowardsCurrent?: boolean;
+
+    /**
+     * Validate the history with the depth of the reprojected surface (Nehab et al. 2007), stored with the history.
+     * Disoccluded pixels refresh faster ({@link disocclusionBlend}), pixels on the same surface use the wider
+     * {@link trustedGamma}: the reprojection of the rigid object is exact, so only shading changes are left to clamp.
+     *
+     * @defaultValue false
+     */
+
+    depthRejection?: boolean;
+
+    /**
+     * The relative view depth difference below which the history holds the same surface. Must be smaller than the
+     * gap between overlapping parts: 0.0015 is 1.2 mm at 0.8 m, and the clips stand 2.7 mm above the print. The
+     * expected depth is exact (rigid reprojection, or the depth change of the velocity buffer), and the stored depth is
+     * a half float, about 0.06% precise.
+     *
+     * @defaultValue 0.0015
+     */
+
+    depthTolerance?: number;
+
+    /**
+     * Also reject history whose motion differs from the current one by more than {@link motionTolerance} (motion
+     * vector divergence, FSR 2 / TSR). Depth can't separate a thin part lying flush on another: when it slides off, the
+     * surface it uncovers would keep its history. Their motions differ, though.
+     *
+     * @defaultValue false
+     */
+
+    motionRejection?: boolean;
+
+    /**
+     * The motion difference, in pixels per frame, still treated as the same surface. A quarter of the current motion
+     * is added for acceleration.
+     *
+     * @defaultValue 1.0
+     */
+
+    motionTolerance?: number;
+
+    /**
+     * The clamp width on surfaces that passed the depth validation. See {@link depthRejection}.
+     *
+     * @defaultValue 2.0
+     */
+
+    trustedGamma?: number;
+
+    /**
+     * The lowest weight of the current frame on disoccluded pixels. See {@link depthRejection}.
+     *
+     * @defaultValue 0.35
+     */
+
+    disocclusionBlend?: number;
+
+    /**
+     * Lock the history of thin features against the clamp (FSR 2). A pixel that no 2x2 quad around it resembles is
+     * a sub-pixel line, which some jitter positions miss entirely; the clamp then erases it from the history in those
+     * frames, which is what breaks the line into steps in motion. Locks follow the surface and fade over
+     * {@link lockFrames}; a disocclusion drops them when {@link depthRejection} is on.
+     *
+     * @defaultValue false
+     */
+
+    thinFeatureLocks?: boolean;
+
+    /**
+     * How many frames a lock lasts after the feature was last detected. It fades linearly.
+     *
+     * @defaultValue 8
+     */
+
+    lockFrames?: number;
+
+    /**
+     * The luma ratio above which two pixels look alike for the thin feature test. Higher locks more.
+     *
+     * @defaultValue 0.75
+     */
+
+    lockSimilarity?: number;
+
+    /**
+     * How much a full lock bypasses the clamp.
+     *
+     * @defaultValue 1.0
+     */
+
+    lockStrength?: number;
+
+    /**
+     * Lower the weight of the current frame towards {@link edgeBlend} in high-contrast neighbourhoods while moving
+     * (Malan 2012). That's where the jitter shows the most.
+     *
+     * @defaultValue false
+     */
+
+    edgeAdaptiveBlend?: boolean;
+
+    /**
+     * The weight of the current frame on high-contrast edges while moving. See {@link edgeAdaptiveBlend}.
+     *
+     * @defaultValue 0.08
+     */
+
+    edgeBlend?: number;
+
+    /**
+     * Weight each frame by how close its jittered sample landed to the pixel centre while moving (UE4).
+     *
+     * @defaultValue false
+     */
+
+    sampleConfidence?: boolean;
+
+    /**
+     * The reprojection speed, in pixels per frame, at which locks are fully faded out. They start fading at half of it.
+     * Whatever a lock keeps is visibly out of date in fast motion, and motion blur hides the steps there anyway. 0 keeps
+     * locks at any speed.
+     *
+     * @defaultValue 0
+     */
+
+    lockMaxSpeed?: number;
+
+    /**
+     * Where transparent surfaces cover the image, 0 to 1, e.g. {@link TonemappedResolvePass.reactiveMask}. Their
+     * reflections and scratches move on their own and the depth behind them doesn't describe them, so they get no
+     * locks, no relaxed clamp and no edge blend (FSR 2 "reactive mask"). Must match the output resolution.
+     *
+     * @defaultValue null
+     */
+
+    reactiveMask?: Texture | null;
+
+    /**
+     * How much the {@link reactiveMask} applies.
+     *
+     * @defaultValue 1.0
+     */
+
+    reactiveStrength?: number;
+
+    /**
+     * Per-object velocity from the geometry pass. Without it, motion is reprojected analytically for the camera and the
+     * {@link TemporalAAPass.trackedObject} only, which moves as one rigid body.
+     *
+     * @defaultValue null
+     */
+
+    velocityBuffer?: VelocityBuffer | null;
+
 }
+
+/**
+ * The shape of the clamp box. See {@link TemporalAAPassOptions.boxMode}.
+ */
+
+export type TemporalAABoxMode = "variance" | "minmax" | "intersection";
+
+const BOX_MODES: TemporalAABoxMode[] = ["variance", "minmax", "intersection"];
+
+// Stands in for a missing reactive mask, never read: the shader skips the lookup when the strength is 0
+const BLACK = new DataTexture(new Uint8Array(4), 1, 1);
+BLACK.needsUpdate = true;
 
 /**
  * Temporal antialiasing for a single rigid object in front of a static background.
@@ -552,6 +1032,9 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
     /** @see {@link TemporalAAPassOptions.backgroundFastPath} */
     backgroundFastPath: boolean;
 
+    /** @see {@link TemporalAAPassOptions.velocityBuffer} */
+    private _velocityBuffer: VelocityBuffer | null = null;
+
     /**
      * Ping-pong history: one is read while the other is written. Both also have the output texture as a second
      * attachment, so a single draw writes the history and the output.
@@ -561,6 +1044,8 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
     private frame: number;
     private stillFrames: number;
     private _blend: number;
+    private _reactiveMask: Texture | null = null;
+    private _reactiveStrength = 1.0;
 
     private readonly projection: Matrix4;
     private readonly viewProjection: Matrix4;
@@ -593,7 +1078,27 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
         staticConvergence = true,
         varianceGamma = 1.0,
         clampHistory = true,
-        backgroundFastPath = false
+        backgroundFastPath = false,
+        neighbourhood = 5,
+        boxMode = "variance",
+        clipTowardsCurrent = false,
+        depthRejection = false,
+        depthTolerance = 0.0015,
+        motionRejection = false,
+        motionTolerance = 1.0,
+        trustedGamma = 2.0,
+        disocclusionBlend = 0.35,
+        thinFeatureLocks = false,
+        lockFrames = 8,
+        lockSimilarity = 0.75,
+        lockStrength = 1.0,
+        edgeAdaptiveBlend = false,
+        edgeBlend = 0.08,
+        sampleConfidence = false,
+        lockMaxSpeed = 0.0,
+        reactiveMask = null,
+        reactiveStrength = 1.0,
+        velocityBuffer = null
     }: TemporalAAPassOptions = {}) {
 
         super("TemporalAAPass");
@@ -612,6 +1117,25 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
         uniforms.motionFilterScale.value = motionFilterScale;
         uniforms.jitterCompensation.value = jitterCompensation ? 1.0 : 0.0;
         uniforms.varianceGamma.value = varianceGamma;
+        uniforms.neighbourCount.value = neighbourhood;
+        uniforms.clipTowardsCurrent.value = clipTowardsCurrent;
+        uniforms.depthRejection.value = depthRejection;
+        uniforms.depthTolerance.value = depthTolerance;
+        uniforms.motionRejection.value = motionRejection;
+        uniforms.motionTolerance.value = motionTolerance;
+        uniforms.trustedGamma.value = trustedGamma;
+        uniforms.disocclusionBlend.value = disocclusionBlend;
+        uniforms.thinFeatureLocks.value = thinFeatureLocks;
+        uniforms.lockSimilarity.value = lockSimilarity;
+        uniforms.lockStrength.value = lockStrength;
+        uniforms.edgeAdaptiveBlend.value = edgeAdaptiveBlend;
+        uniforms.edgeBlend.value = edgeBlend;
+        uniforms.sampleConfidence.value = sampleConfidence;
+        uniforms.lockMaxSpeed.value = lockMaxSpeed;
+        this._reactiveStrength = reactiveStrength;
+        this.reactiveMask = reactiveMask;
+        this.boxMode = boxMode;
+        this.lockFrames = lockFrames;
 
         this.input.gBuffer.add(GBuffer.COLOR);
         this.input.gBuffer.add(GBuffer.DEPTH);
@@ -626,11 +1150,15 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
         // The history accumulates over many frames, R11G11B10 measurably loses edge quality there. Linear filtering:
         // the 5-tap Catmull-Rom relies on it. Writing the output as a second attachment saves a copy pass, which
         // costs ~1.3 ms at 3070x2050 on an M1: copyTexSubImage2D can't convert RGBA16F to R11G11B10.
-        const historyOptions = { type: HalfFloatType, format: RGBAFormat, depthBuffer: false, count: 2 };
+        // The third attachment is the per-pixel state (surface depth, thin feature lock), ping-ponged with the history.
+        // It isn't filterable, the shader fetches texels.
+        const historyOptions = { type: HalfFloatType, format: RGBAFormat, depthBuffer: false, count: 3 };
         this.history = [new WebGLRenderTarget(1, 1, historyOptions), new WebGLRenderTarget(1, 1, historyOptions)];
         this.history.forEach((buffer) => {
 
             buffer.textures[1] = outputBuffer.texture;
+            buffer.textures[2].minFilter = NearestFilter;
+            buffer.textures[2].magFilter = NearestFilter;
             this.disposables.add(buffer);
 
         });
@@ -648,6 +1176,8 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
         this.previousObjectMatrix = new Matrix4();
         this.jitter = new Vector2();
         this.jittered = false;
+        // Last: it resets the history, which needs the jitter state
+        this.velocityBuffer = velocityBuffer;
 
     }
 
@@ -731,6 +1261,320 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
 
     }
 
+    /** @see {@link TemporalAAPassOptions.neighbourhood} */
+    get neighbourhood(): 5 | 9 {
+
+        return this.fullscreenMaterial.uniforms.neighbourCount.value;
+
+    }
+
+    set neighbourhood(value: 5 | 9) {
+
+        this.fullscreenMaterial.uniforms.neighbourCount.value = value;
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.boxMode} */
+    get boxMode(): TemporalAABoxMode {
+
+        return BOX_MODES[this.fullscreenMaterial.uniforms.boxMode.value];
+
+    }
+
+    set boxMode(value: TemporalAABoxMode) {
+
+        this.fullscreenMaterial.uniforms.boxMode.value = Math.max(BOX_MODES.indexOf(value), 0);
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.clipTowardsCurrent} */
+    get clipTowardsCurrent(): boolean {
+
+        return this.fullscreenMaterial.uniforms.clipTowardsCurrent.value;
+
+    }
+
+    set clipTowardsCurrent(value: boolean) {
+
+        this.fullscreenMaterial.uniforms.clipTowardsCurrent.value = value;
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.depthRejection} */
+    get depthRejection(): boolean {
+
+        return this.fullscreenMaterial.uniforms.depthRejection.value;
+
+    }
+
+    set depthRejection(value: boolean) {
+
+        this.fullscreenMaterial.uniforms.depthRejection.value = value;
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.depthTolerance} */
+    get depthTolerance(): number {
+
+        return this.fullscreenMaterial.uniforms.depthTolerance.value;
+
+    }
+
+    set depthTolerance(value: number) {
+
+        this.fullscreenMaterial.uniforms.depthTolerance.value = value;
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.motionRejection} */
+    get motionRejection(): boolean {
+
+        return this.fullscreenMaterial.uniforms.motionRejection.value;
+
+    }
+
+    set motionRejection(value: boolean) {
+
+        this.fullscreenMaterial.uniforms.motionRejection.value = value;
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.motionTolerance} */
+    get motionTolerance(): number {
+
+        return this.fullscreenMaterial.uniforms.motionTolerance.value;
+
+    }
+
+    set motionTolerance(value: number) {
+
+        this.fullscreenMaterial.uniforms.motionTolerance.value = value;
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.trustedGamma} */
+    get trustedGamma(): number {
+
+        return this.fullscreenMaterial.uniforms.trustedGamma.value;
+
+    }
+
+    set trustedGamma(value: number) {
+
+        this.fullscreenMaterial.uniforms.trustedGamma.value = value;
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.disocclusionBlend} */
+    get disocclusionBlend(): number {
+
+        return this.fullscreenMaterial.uniforms.disocclusionBlend.value;
+
+    }
+
+    set disocclusionBlend(value: number) {
+
+        this.fullscreenMaterial.uniforms.disocclusionBlend.value = value;
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.thinFeatureLocks} */
+    get thinFeatureLocks(): boolean {
+
+        return this.fullscreenMaterial.uniforms.thinFeatureLocks.value;
+
+    }
+
+    set thinFeatureLocks(value: boolean) {
+
+        this.fullscreenMaterial.uniforms.thinFeatureLocks.value = value;
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.lockFrames} */
+    get lockFrames(): number {
+
+        return 1.0 / this.fullscreenMaterial.uniforms.lockStep.value;
+
+    }
+
+    set lockFrames(value: number) {
+
+        this.fullscreenMaterial.uniforms.lockStep.value = 1.0 / Math.max(value, 1.0);
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.lockSimilarity} */
+    get lockSimilarity(): number {
+
+        return this.fullscreenMaterial.uniforms.lockSimilarity.value;
+
+    }
+
+    set lockSimilarity(value: number) {
+
+        this.fullscreenMaterial.uniforms.lockSimilarity.value = value;
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.lockStrength} */
+    get lockStrength(): number {
+
+        return this.fullscreenMaterial.uniforms.lockStrength.value;
+
+    }
+
+    set lockStrength(value: number) {
+
+        this.fullscreenMaterial.uniforms.lockStrength.value = value;
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.edgeAdaptiveBlend} */
+    get edgeAdaptiveBlend(): boolean {
+
+        return this.fullscreenMaterial.uniforms.edgeAdaptiveBlend.value;
+
+    }
+
+    set edgeAdaptiveBlend(value: boolean) {
+
+        this.fullscreenMaterial.uniforms.edgeAdaptiveBlend.value = value;
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.edgeBlend} */
+    get edgeBlend(): number {
+
+        return this.fullscreenMaterial.uniforms.edgeBlend.value;
+
+    }
+
+    set edgeBlend(value: number) {
+
+        this.fullscreenMaterial.uniforms.edgeBlend.value = value;
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.sampleConfidence} */
+    get sampleConfidence(): boolean {
+
+        return this.fullscreenMaterial.uniforms.sampleConfidence.value;
+
+    }
+
+    set sampleConfidence(value: boolean) {
+
+        this.fullscreenMaterial.uniforms.sampleConfidence.value = value;
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.velocityBuffer} */
+    get velocityBuffer(): VelocityBuffer | null {
+
+        return this._velocityBuffer;
+
+    }
+
+    set velocityBuffer(value: VelocityBuffer | null) {
+
+        // Requesting the component makes the pipeline add it to the geometry pass, which recompiles the materials
+        this._velocityBuffer = value;
+
+        if(value !== null) {
+
+            this.input.gBuffer.add(VELOCITY);
+
+        } else {
+
+            this.input.gBuffer.delete(VELOCITY);
+
+        }
+
+        this.onInputChange();
+        this.reset();
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.lockMaxSpeed} */
+    get lockMaxSpeed(): number {
+
+        return this.fullscreenMaterial.uniforms.lockMaxSpeed.value;
+
+    }
+
+    set lockMaxSpeed(value: number) {
+
+        this.fullscreenMaterial.uniforms.lockMaxSpeed.value = value;
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.reactiveMask} */
+    get reactiveMask(): Texture | null {
+
+        return this._reactiveMask;
+
+    }
+
+    set reactiveMask(value: Texture | null) {
+
+        this._reactiveMask = value;
+        this.updateReactive();
+
+    }
+
+    /** @see {@link TemporalAAPassOptions.reactiveStrength} */
+    get reactiveStrength(): number {
+
+        return this._reactiveStrength;
+
+    }
+
+    set reactiveStrength(value: number) {
+
+        this._reactiveStrength = value;
+        this.updateReactive();
+
+    }
+
+    private updateReactive(): void {
+
+        // Without a mask the shader skips the lookup entirely
+        const uniforms = this.fullscreenMaterial.uniforms;
+        uniforms.reactiveMask.value = this._reactiveMask ?? BLACK;
+        uniforms.reactiveStrength.value = this._reactiveMask !== null ? this._reactiveStrength : 0.0;
+
+    }
+
+    /**
+     * The per-pixel state written by the latest frame: x the view depth of the surface (0 for the background), y the
+     * thin feature lock, zw the screen motion since the previous frame in pixels. Depth and motion are those of the
+     * closest surface in the 3x3 neighbourhood, which the pixel is reprojected with. Valid after this pass has rendered.
+     */
+
+    get stateTexture(): Texture {
+
+        return this.history[this.frame % 2].textures[2];
+
+    }
+
+    /**
+     * Overlays per-pixel state on the output, for tuning: 0 none, 1 effective thin feature locks (red), 2 depth
+     * validation (green trusted, red disoccluded), 3 reactive mask (blue). The history isn't affected.
+     */
+
+    get debugView(): number {
+
+        return this.fullscreenMaterial.uniforms.debugView.value;
+
+    }
+
+    set debugView(value: number) {
+
+        this.fullscreenMaterial.uniforms.debugView.value = value;
+
+    }
+
     get enabled(): boolean {
 
         return super.enabled;
@@ -803,6 +1647,7 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
 
         // Keep the unjittered projection for reprojection and to restore it afterwards
         this.projection.copy(camera.projectionMatrix);
+        this._velocityBuffer?.update(camera, this.projection);
 
         const index = (this.frame % this.jitterSamples) + 1;
         const x = (halton(index, 2) - 0.5) * this.jitterScale;
@@ -839,7 +1684,11 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
 
     protected override onInputChange(): void {
 
-        this.fullscreenMaterial.uniforms.depthBuffer.value = this.input.getBuffer(GBuffer.DEPTH);
+        const uniforms = this.fullscreenMaterial.uniforms;
+        const velocity = this._velocityBuffer !== null ? this.input.getBuffer(VELOCITY) : null;
+        uniforms.depthBuffer.value = this.input.getBuffer(GBuffer.DEPTH);
+        uniforms.velocityBuffer.value = velocity ?? BLACK;
+        uniforms.useVelocityBuffer.value = velocity !== null;
 
     }
 
@@ -926,17 +1775,21 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
 
         }
 
+        // With per-object velocity, a part can move on its own while the camera and the tracked object rest
         const still = this.staticConvergence && uniforms.historyValid.value &&
             matricesEqual(this.viewProjection, this.previousViewProjection) &&
-            matricesEqual(this.objectMatrix, this.previousObjectMatrix);
+            matricesEqual(this.objectMatrix, this.previousObjectMatrix) &&
+            !(this._velocityBuffer !== null && uniforms.useVelocityBuffer.value && this._velocityBuffer.meshesMoved);
 
         this.stillFrames = still ? this.stillFrames + 1 : 0;
         uniforms.blend.value = still ? Math.max(1.0 / (1.0 / this._blend + this.stillFrames), this.staticBlend) : this._blend;
         uniforms.clipHistory.value = this.clampHistory && !still;
+        uniforms.moving.value = !still;
 
         const historyRead = this.history[this.frame % 2];
         const historyWrite = this.history[(this.frame + 1) % 2];
         uniforms.historyBuffer.value = historyRead.texture;
+        uniforms.stateBuffer.value = historyRead.textures[2];
 
         this.setRenderTarget(historyWrite);
         this.renderFullscreen();

@@ -1,11 +1,14 @@
 import {
     Camera,
     Color,
+    DoubleSide,
     HalfFloatType,
     Material,
     Object3D,
+    RedFormat,
     RGBFormat,
     Scene,
+    ShaderMaterial,
     Texture,
     Uniform,
     WebGLProgramParametersWithUniforms,
@@ -53,6 +56,39 @@ void main() {
 }
 `;
 
+/**
+ * Writes 1 where a transparent surface faces the camera, fading to 0 edge-on: the thin edges of a glass pane alias like
+ * any other edge and keep their temporal antialiasing. See {@link TonemappedResolvePass.reactiveMask}.
+ */
+
+const reactiveMaskMaterial = () => new ShaderMaterial({
+    name: "ReactiveMaskMaterial",
+    vertexShader: /* glsl */ `
+		varying vec3 vViewPosition;
+
+		void main() {
+
+			vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+			vViewPosition = -mvPosition.xyz;
+			gl_Position = projectionMatrix * mvPosition;
+
+		}
+	`,
+    fragmentShader: /* glsl */ `
+		varying vec3 vViewPosition;
+
+		void main() {
+
+			vec3 faceNormal = normalize(cross(dFdx(vViewPosition), dFdy(vViewPosition)));
+			float facing = abs(dot(faceNormal, normalize(vViewPosition)));
+			gl_FragColor = vec4(smoothstep(0.1, 0.3, facing), 0.0, 0.0, 1.0);
+
+		}
+	`,
+    side: DoubleSide,
+    depthWrite: false
+});
+
 class TonemappedResolveMaterial extends FullscreenMaterial {
 
     constructor(exposure: Uniform<number>) {
@@ -94,6 +130,14 @@ export interface TonemappedResolvePassOptions {
 
     layer?: number;
 
+    /**
+     * Controls whether {@link TonemappedResolvePass.reactiveMask} is rendered.
+     *
+     * @defaultValue false
+     */
+
+    reactiveMask?: boolean;
+
 }
 
 /**
@@ -117,12 +161,22 @@ export class TonemappedResolvePass extends Pass<TonemappedResolveMaterial> {
     private readonly exposureUniform: Uniform<number>;
 
     /**
+     * Controls whether {@link reactiveMask} is rendered. It costs one more draw of the transparent objects.
+     */
+
+    reactiveMaskEnabled: boolean;
+
+    private readonly reactiveMaskBuffer: WebGLRenderTarget;
+    private readonly reactiveMaskMaterial: ShaderMaterial;
+    private readonly clearColor = new Color();
+
+    /**
      * Constructs a new tonemapped resolve pass.
      *
      * @param options - The options.
      */
 
-    constructor({ exposure = 1.0, layer = 1 }: TonemappedResolvePassOptions = {}) {
+    constructor({ exposure = 1.0, layer = 1, reactiveMask = false }: TonemappedResolvePassOptions = {}) {
 
         super("TonemappedResolvePass");
 
@@ -139,6 +193,24 @@ export class TonemappedResolvePass extends Pass<TonemappedResolveMaterial> {
         const outputBuffer = new WebGLRenderTarget(1, 1, { type: HalfFloatType, format: RGBFormat, depthBuffer: true });
         outputBuffer.texture.internalFormat = "R11F_G11F_B10F";
         this.output.defaultBuffer = outputBuffer;
+
+        // Depth tested against the opaque geometry like the transparent objects themselves, see updateDepthTexture
+        this.reactiveMaskEnabled = reactiveMask;
+        this.reactiveMaskBuffer = new WebGLRenderTarget(1, 1, { format: RedFormat, depthBuffer: true });
+        this.reactiveMaskMaterial = reactiveMaskMaterial();
+        this.disposables.add(this.reactiveMaskBuffer);
+        this.disposables.add(this.reactiveMaskMaterial);
+
+    }
+
+    /**
+     * Where the transparent objects cover the image, for {@link TemporalAAPass.reactiveMask}: 1 where they face the
+     * camera, 0 edge-on and elsewhere. Only rendered while {@link reactiveMaskEnabled}.
+     */
+
+    get reactiveMask(): Texture {
+
+        return this.reactiveMaskBuffer.texture;
 
     }
 
@@ -265,6 +337,7 @@ export class TonemappedResolvePass extends Pass<TonemappedResolveMaterial> {
         if(outputBuffer !== null && depthTexture !== null) {
 
             outputBuffer.depthTexture = depthTexture as WebGLRenderTarget["depthTexture"];
+            this.reactiveMaskBuffer.depthTexture = depthTexture as WebGLRenderTarget["depthTexture"];
 
         }
 
@@ -279,6 +352,17 @@ export class TonemappedResolvePass extends Pass<TonemappedResolveMaterial> {
     protected override onOutputChange(): void {
 
         this.updateDepthTexture();
+
+    }
+
+    protected override onResolutionChange(): void {
+
+        // setSize() disposes the target, and disposing a target disposes its depth texture: detach the shared one first
+        const buffer = this.reactiveMaskBuffer;
+        const depthTexture = buffer.depthTexture;
+        buffer.depthTexture = null;
+        buffer.setSize(this.resolution.width, this.resolution.height);
+        buffer.depthTexture = depthTexture;
 
     }
 
@@ -313,6 +397,22 @@ export class TonemappedResolvePass extends Pass<TonemappedResolveMaterial> {
         renderer.autoClear = false;
 
         renderer.render(scene, camera);
+
+        if(this.reactiveMaskEnabled) {
+
+            const clearAlpha = renderer.getClearAlpha();
+            renderer.getClearColor(this.clearColor);
+            renderer.setClearColor(0x000000, 0.0);
+            this.setRenderTarget(this.reactiveMaskBuffer);
+            renderer.clear(true, false, false);
+            renderer.setClearColor(this.clearColor, clearAlpha);
+
+            const overrideMaterial = scene.overrideMaterial;
+            scene.overrideMaterial = this.reactiveMaskMaterial;
+            renderer.render(scene, camera);
+            scene.overrideMaterial = overrideMaterial;
+
+        }
 
         camera.layers.mask = mask;
         scene.background = background;

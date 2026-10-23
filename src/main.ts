@@ -261,7 +261,7 @@ class MonkView extends HTMLElement {
       startup,
       lowPerformanceSettings: this.getLowPerformanceSettings(),
       smaa: this.getAttribute("smaa") === "true",
-      grazingSpecularClamp: this.getAttribute("grazing-specular-clamp") !== "false",
+      grazingSpecularClamp: this.getAttribute("grazing-specular-clamp") === "true",
       perfSampling
     };
   }

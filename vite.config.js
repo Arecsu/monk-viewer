@@ -58,6 +58,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: path.resolve(import.meta.dirname, "index.html"),
+        // Dev-only tuning page, also built so it is reachable on the deployed site
+        "aa-lab": path.resolve(import.meta.dirname, "aa-lab.html"),
       },
       output: {
         entryFileNames: (chunkInfo) => {
