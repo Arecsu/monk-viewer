@@ -213,6 +213,7 @@ class MonkView extends HTMLElement {
     initDelayInteractive: number;
     startup: string;
     lowPerformanceSettings: ReturnType<MonkView["getLowPerformanceSettings"]>;
+    grazingSpecularClamp: boolean;
     perfSampling: {
       stabilityDuration: number;
       measureDuration: number;
@@ -256,6 +257,7 @@ class MonkView extends HTMLElement {
       initDelayInteractive,
       startup,
       lowPerformanceSettings: this.getLowPerformanceSettings(),
+      grazingSpecularClamp: this.getAttribute("grazing-specular-clamp") !== "false",
       perfSampling
     };
   }

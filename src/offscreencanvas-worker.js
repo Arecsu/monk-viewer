@@ -106,6 +106,7 @@ function start(data) {
 		startup: data.startup,
 		initDelayInteractive: data.initDelayInteractive,
 		lowPerformanceSettings: data.lowPerformanceSettings,
+		grazingSpecularClamp: data.grazingSpecularClamp,
 		perfSampling: data.perfSampling,
 		e_interactivityChange: (state) => proxy.m_interactivity(state),
 		e_loaded: (state) => proxy.m_loaded(state),

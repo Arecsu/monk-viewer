@@ -5,6 +5,7 @@ import { HDRJPGLoader } from "@monogrid/gainmap-js"
 import { DitheringEffect } from "./postprocessing/DitheringEffect.js"
 import { TonemappedResolvePass } from "./postprocessing/TonemappedResolvePass.js"
 import { TemporalAAPass } from "./postprocessing/TemporalAAPass.js"
+import { GrazingSpecularClamp } from "./postprocessing/GrazingSpecularClamp.js"
 import { BloomEffect, RenderPipeline, ClearPass, GeometryPass, EffectPass, ToneMappingEffect, ToneMapping } from "postprocessing"
 // import HDRIMAP from "./envmaps/old_bus_depot_4k_blur.jpg?url"
 import { easeOutQuart, easeInCubic, easeOutCubic } from "js-easing-functions"
@@ -31,6 +32,9 @@ class ThreeSceneManager {
 		// Tonemapped resolve only pays off with MSAA
 		this.resolvePass = null
 		this.taa = null
+		// Dims the HDR reflections of edge-on surfaces, which alias into thin bright lines. Always compiled in,
+		// grazingClamp.enabled toggles it at runtime.
+		this.grazingClamp = new GrazingSpecularClamp({ enabled: data.grazingSpecularClamp ?? true })
 
 		this.pixelRatioVariation = 1 // this to handle screen DPI changes
 
@@ -425,6 +429,7 @@ class ThreeSceneManager {
 				});
 				// Before scene.add(), so the GeometryPass shader plugin wraps the encoding hook
 				this.resolvePass?.prepare(this.model)
+				this.grazingClamp.prepare(this.model)
 				if (this.taa) this.taa.trackedObject = this.model
 
 					this.optimizeModelTextures(this.model)
