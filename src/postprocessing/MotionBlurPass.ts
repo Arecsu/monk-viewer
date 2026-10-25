@@ -9,7 +9,7 @@ import type { TemporalAAPass } from "./TemporalAAPass.js";
  * "Next Generation Post Processing in Call of Duty: Advanced Warfare" (the approach of id Tech 6/7 and most current
  * engines):
  *
- * 1. Tile max: the largest motion in each tile of {@link maxBlur} pixels.
+ * 1. Tile max: the largest motion in each tile of {@link maxBlur} pixels, reduced along rows then columns.
  * 2. Neighbour max: the largest motion in the 3x3 tiles around, so that a moving object can smear over the static
  *    background next to it. Blurring each pixel along its own motion only can't do that: the silhouette stays sharp.
  * 3. Gather: samples along the neighbourhood's motion and along the pixel's own, weighted by depth so that the
@@ -20,7 +20,10 @@ import type { TemporalAAPass } from "./TemporalAAPass.js";
  * counts as infinitely far and static.
  */
 
-const tileMaxShader = /* glsl */ `
+// The tile max is separable: the largest of the largest per row is the largest of the tile. Two passes of tileSize
+// fetches per fragment instead of one of tileSize², which leaves only a few hundred fragments, each looping over tens of
+// thousands of texels: at 4K the single pass took longer than the rest of the frame.
+const tileMaxXShader = /* glsl */ `
 #include <pp_default_output_pars_fragment>
 
 uniform highp sampler2D stateBuffer;
@@ -40,31 +43,53 @@ vec2 blurVector(vec2 motion) {
 void main() {
 
 	ivec2 size = textureSize(stateBuffer, 0);
-	ivec2 base = ivec2(gl_FragCoord.xy) * tileSize;
+	ivec2 base = ivec2(int(gl_FragCoord.x) * tileSize, int(gl_FragCoord.y));
+	int end = min(tileSize, size.x - base.x);
 	vec2 largest = vec2(0.0);
 	float largestLength = 0.0;
 
-	for(int y = 0; y < tileSize; ++y) {
+	for(int x = 0; x < end; ++x) {
 
-		for(int x = 0; x < tileSize; ++x) {
+		vec2 v = blurVector(texelFetch(stateBuffer, base + ivec2(x, 0), 0).zw);
+		float l = dot(v, v);
 
-			ivec2 coord = base + ivec2(x, y);
+		if(l > largestLength) {
 
-			if(any(greaterThanEqual(coord, size))) {
+			largestLength = l;
+			largest = v;
 
-				continue;
+		}
 
-			}
+	}
 
-			vec2 v = blurVector(texelFetch(stateBuffer, coord, 0).zw);
-			float l = dot(v, v);
+	out_Color = vec4(largest, 0.0, 1.0);
 
-			if(l > largestLength) {
+}
+`;
 
-				largestLength = l;
-				largest = v;
+const tileMaxYShader = /* glsl */ `
+#include <pp_default_output_pars_fragment>
 
-			}
+uniform highp sampler2D rowBuffer;
+uniform int tileSize;
+
+void main() {
+
+	ivec2 size = textureSize(rowBuffer, 0);
+	ivec2 base = ivec2(int(gl_FragCoord.x), int(gl_FragCoord.y) * tileSize);
+	int end = min(tileSize, size.y - base.y);
+	vec2 largest = vec2(0.0);
+	float largestLength = 0.0;
+
+	for(int y = 0; y < end; ++y) {
+
+		vec2 v = texelFetch(rowBuffer, base + ivec2(0, y), 0).xy;
+		float l = dot(v, v);
+
+		if(l > largestLength) {
+
+			largestLength = l;
+			largest = v;
 
 		}
 
@@ -301,9 +326,11 @@ export class MotionBlurPass extends Pass<MotionBlurMaterial> {
 
     readonly backgroundBounds = new Vector4(0, 0, 1, 1);
 
-    private readonly tileMaxMaterial: MotionBlurMaterial;
+    private readonly tileMaxXMaterial: MotionBlurMaterial;
+    private readonly tileMaxYMaterial: MotionBlurMaterial;
     private readonly neighbourMaxMaterial: MotionBlurMaterial;
     private readonly gatherMaterial: MotionBlurMaterial;
+    private readonly tileMaxX: WebGLRenderTarget;
     private readonly tileMax: WebGLRenderTarget;
     private readonly neighbourMax: WebGLRenderTarget;
     private readonly outputBuffer: WebGLRenderTarget;
@@ -333,8 +360,11 @@ export class MotionBlurPass extends Pass<MotionBlurMaterial> {
         this._maxBlur = maxBlur;
 
         const shared = { tileSize: this.tileSize, shutter: this.shutterUniform, maxBlur: this.maxBlurUniform };
-        this.tileMaxMaterial = new MotionBlurMaterial("MotionBlurTileMaxMaterial", tileMaxShader, {
+        this.tileMaxXMaterial = new MotionBlurMaterial("MotionBlurTileMaxXMaterial", tileMaxXShader, {
             ...shared, stateBuffer: new Uniform(null)
+        });
+        this.tileMaxYMaterial = new MotionBlurMaterial("MotionBlurTileMaxYMaterial", tileMaxYShader, {
+            tileSize: this.tileSize, rowBuffer: new Uniform(null)
         });
         this.neighbourMaxMaterial = new MotionBlurMaterial("MotionBlurNeighbourMaxMaterial", neighbourMaxShader, {
             tileBuffer: new Uniform(null)
@@ -351,14 +381,17 @@ export class MotionBlurPass extends Pass<MotionBlurMaterial> {
         });
 
         // Compiled and kept in sync by the pass: every fullscreen material it has used is registered
-        this.fullscreenMaterial = this.tileMaxMaterial;
+        this.fullscreenMaterial = this.tileMaxXMaterial;
+        this.fullscreenMaterial = this.tileMaxYMaterial;
         this.fullscreenMaterial = this.neighbourMaxMaterial;
         this.fullscreenMaterial = this.gatherMaterial;
 
         const tileOptions = { type: HalfFloatType, format: RGBAFormat, depthBuffer: false,
             minFilter: NearestFilter, magFilter: NearestFilter };
+        this.tileMaxX = new WebGLRenderTarget(1, 1, tileOptions);
         this.tileMax = new WebGLRenderTarget(1, 1, tileOptions);
         this.neighbourMax = new WebGLRenderTarget(1, 1, tileOptions);
+        this.disposables.add(this.tileMaxX);
         this.disposables.add(this.tileMax);
         this.disposables.add(this.neighbourMax);
 
@@ -367,6 +400,7 @@ export class MotionBlurPass extends Pass<MotionBlurMaterial> {
         this.outputBuffer.texture.internalFormat = "R11F_G11F_B10F";
         this.output.defaultBuffer = this.outputBuffer;
 
+        this.tileMaxYMaterial.uniforms.rowBuffer.value = this.tileMaxX.texture;
         this.neighbourMaxMaterial.uniforms.tileBuffer.value = this.tileMax.texture;
         this.gatherMaterial.uniforms.neighbourBuffer.value = this.neighbourMax.texture;
 
@@ -431,6 +465,7 @@ export class MotionBlurPass extends Pass<MotionBlurMaterial> {
         const tile = Math.max(Math.ceil(this._maxBlur * height), 1);
         this.tileSize.value = tile;
         this.maxBlurUniform.value = tile;
+        this.tileMaxX.setSize(Math.ceil(width / tile), height);
         this.tileMax.setSize(Math.ceil(width / tile), Math.ceil(height / tile));
         this.neighbourMax.setSize(Math.ceil(width / tile), Math.ceil(height / tile));
         this.outputBuffer.setSize(width, height);
@@ -454,7 +489,7 @@ export class MotionBlurPass extends Pass<MotionBlurMaterial> {
         gather.hasMotion.value = taa.enabled;
         gather.frame.value = this.frame++ % 64;
         gather.stateBuffer.value = state;
-        this.tileMaxMaterial.uniforms.stateBuffer.value = state;
+        this.tileMaxXMaterial.uniforms.stateBuffer.value = state;
 
         const { width, height } = this.resolution;
         const bounds = this.backgroundBounds.set(0, 0, 1, 1);
@@ -470,7 +505,11 @@ export class MotionBlurPass extends Pass<MotionBlurMaterial> {
 
         if(taa.enabled) {
 
-            this.fullscreenMaterial = this.tileMaxMaterial;
+            this.fullscreenMaterial = this.tileMaxXMaterial;
+            this.setRenderTarget(this.tileMaxX);
+            this.renderFullscreen();
+
+            this.fullscreenMaterial = this.tileMaxYMaterial;
             this.setRenderTarget(this.tileMax);
             this.renderFullscreen();
 
