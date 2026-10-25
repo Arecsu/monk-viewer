@@ -70,6 +70,21 @@
     <h2>Specular AA</h2>
     <div id="specular"></div>
 
+    <h2>Tone mapping</h2>
+    <div class="toggles" id="tonemapping-toggles"></div>
+    <div id="tonemapping"></div>
+
+    <h2>Edge resolve</h2>
+    <div class="row">
+      <label for="resolve-encoding">MSAA curve</label>
+      <select id="resolve-encoding">
+        <option value="rgb">per channel</option>
+        <option value="max">max channel (keeps hue)</option>
+        <option value="linear">off (plain MSAA)</option>
+      </select>
+    </div>
+    <div id="resolve"></div>
+
     <h2>Temporal</h2>
     <div id="temporal"></div>
 
