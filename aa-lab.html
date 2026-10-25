@@ -111,6 +111,21 @@
     <h2>Specular AA</h2>
     <div id="specular"></div>
 
+    <h2>Tone mapping</h2>
+    <div class="toggles" id="tonemapping-toggles"></div>
+    <div id="tonemapping"></div>
+
+    <h2>Edge resolve</h2>
+    <div class="row">
+      <label for="resolve-encoding">MSAA curve</label>
+      <select id="resolve-encoding">
+        <option value="rgb">per channel</option>
+        <option value="max">max channel (keeps hue)</option>
+        <option value="linear">off (plain MSAA)</option>
+      </select>
+    </div>
+    <div id="resolve"></div>
+
     <h2>Temporal</h2>
     <div id="temporal"></div>
 
@@ -146,7 +161,7 @@
     // ?preset=legacy starts with the previous TAA settings instead of the modern ones.
     // Hotkeys: M MSAA, T TAA, S SMAA, C static convergence, G grazing clamp, J jitter compensation,
     // F adaptive filter, N 3x3 neighbourhood, D depth validation, L thin feature locks, E edge blend,
-    // A specular AA, B motion blur, V cycle the debug view, R reset history, P hide/show the panel.
+    // A specular AA, B motion blur, K GT7 tone mapping, V cycle the debug view, R reset history, P hide/show the panel.
     const params = new URLSearchParams(location.search)
     // A literal "+" in a query string decodes as a space
     const mode = (params.get("mode") ?? "taa").replace(" ", "+")
@@ -381,12 +396,48 @@
         () => mgr.specularAA.variance, (v) => { mgr.specularAA.variance = v }],
       ["specular", "specularThreshold", "threshold", 0, 1, 0.01, 2,
         () => mgr.specularAA.threshold, (v) => { mgr.specularAA.threshold = v }],
+      ["tonemapping", "gt7Exposure", "exposure", 0.5, 8, 0.05, 2,
+        () => mgr.gt7ToneMapping.exposure, (v) => { mgr.gt7ToneMapping.exposure = v }],
+      ["tonemapping", "gt7Contrast", "contrast", 0.5, 2, 0.01, 2,
+        () => mgr.gt7ToneMapping.contrast, (v) => { mgr.gt7ToneMapping.contrast = v }],
+      // Shadows
+      ["tonemapping", "gt7BlackPoint", "black point", -0.15, 0.15, 0.005, 3,
+        () => mgr.gt7ToneMapping.blackPoint, (v) => { mgr.gt7ToneMapping.blackPoint = v }],
+      ["tonemapping", "gt7Toe", "shadow toe", 0.5, 2.5, 0.01, 2,
+        () => mgr.gt7ToneMapping.shadowToe, (v) => { mgr.gt7ToneMapping.shadowToe = v }],
+      ["tonemapping", "gt7ToeLength", "toe length", 0.05, 1.1, 0.01, 2,
+        () => mgr.gt7ToneMapping.toeLength, (v) => { mgr.gt7ToneMapping.toeLength = v }],
+      // Highlights
+      ["tonemapping", "gt7Shoulder", "shoulder start", 0.1, 0.9, 0.01, 2,
+        () => mgr.gt7ToneMapping.shoulderStart, (v) => { mgr.gt7ToneMapping.shoulderStart = v }],
+      ["tonemapping", "gt7Hardness", "highlight hardness", -1, 0.9, 0.01, 2,
+        () => mgr.gt7ToneMapping.highlightHardness, (v) => { mgr.gt7ToneMapping.highlightHardness = v }],
+      ["tonemapping", "gt7Chroma", "chroma preservation", 0, 1, 0.01, 2,
+        () => mgr.gt7ToneMapping.chromaPreservation, (v) => { mgr.gt7ToneMapping.chromaPreservation = v }],
+      // Colour
+      ["tonemapping", "gt7Saturation", "saturation", 0, 2, 0.01, 2,
+        () => mgr.gt7ToneMapping.saturation, (v) => { mgr.gt7ToneMapping.saturation = v }],
+      ["tonemapping", "gt7Vibrance", "vibrance", -1, 1, 0.01, 2,
+        () => mgr.gt7ToneMapping.vibrance, (v) => { mgr.gt7ToneMapping.vibrance = v }],
+      // The curve that MSAA samples and the TAA history are averaged through, see TonemappedResolvePass
+      ["resolve", "resolveExposure", "MSAA exposure", 0.1, 8, 0.05, 2,
+        () => mgr.resolvePass?.exposure ?? 0, (v) => { if (mgr.resolvePass) mgr.resolvePass.exposure = v }],
+      ["resolve", "taaExposure", "TAA exposure", 0.1, 8, 0.05, 2,
+        () => T().exposure, (v) => { T().exposure = v }],
       ["performance", "resolution", "render scale", 0.3, 1.5, 0.05, 2,
         () => resolutionScale, (v) => {
           // Remember what to return to when the half resolution shortcut is switched off
           if (v !== 0.5) resolutionBackup = v
           applyResolutionScale(v)
         }],
+    ]
+
+    // GT7 against the previous Reinhard, both kept in the effect chain
+    const toneMappingToggles = [
+      ["gt7", "GT7 (off: Reinhard)", () => mgr.gt7ToneMapping.enabled, (v) => {
+        mgr.gt7ToneMapping.enabled = v
+        mgr.reinhardToneMapping.enabled = !v
+      }],
     ]
 
     const createToggle = ([key, label, get, set], container = "toggles") => {
@@ -466,6 +517,9 @@
         maxBlur: mgr.motionBlurPass.maxBlur, samples: mgr.motionBlurPass.samples, softDepth: mgr.motionBlurPass.softDepth },
       specularAntialiasing: { enabled: mgr.specularAA.enabled, variance: mgr.specularAA.variance, threshold: mgr.specularAA.threshold },
       grazingSpecularClamp: mgr.grazingClamp.enabled,
+      toneMapping: { gt7: mgr.gt7ToneMapping.enabled, ...Object.fromEntries(["exposure", "contrast", "blackPoint",
+        "shadowToe", "toeLength", "shoulderStart", "highlightHardness", "chromaPreservation", "saturation", "vibrance"].map((k) => [k, mgr.gt7ToneMapping[k]])) },
+      edgeResolve: { encoding: mgr.resolvePass?.encoding, msaaExposure: mgr.resolvePass?.exposure, taaExposure: T().exposure },
     })
 
     const refresh = () => {
@@ -478,6 +532,8 @@
       }
       $("half-res").classList.toggle("on", resolutionScale === 0.5)
       $("box-mode").value = t.boxMode
+      $("resolve-encoding").value = mgr.resolvePass?.encoding ?? "linear"
+      $("resolve-encoding").disabled = !mgr.resolvePass
       $("debug-view").value = String(t.debugView)
       const smaa = toggleButtons.get("smaa").button
       smaa.disabled = !mgr.smaaPass
@@ -510,11 +566,13 @@
     const setupPanel = () => {
       toggles.forEach((t) => createToggle(t))
       modernToggles.forEach((t) => createToggle(t, "modern-toggles"))
+      toneMappingToggles.forEach((t) => createToggle(t, "tonemapping-toggles"))
       sliders.forEach(createSlider)
 
       $("preset").value = params.get("preset") === "legacy" ? "legacy" : "modern"
       $("preset").addEventListener("change", (e) => { applyPreset(e.target.value); refresh() })
       $("box-mode").addEventListener("change", (e) => { T().boxMode = e.target.value; refresh() })
+      $("resolve-encoding").addEventListener("change", (e) => { if (mgr.resolvePass) mgr.resolvePass.encoding = e.target.value; refresh() })
       $("debug-view").addEventListener("change", (e) => { T().debugView = Number(e.target.value); refresh() })
 
       $("motion-mode").value = motion.mode
@@ -567,7 +625,7 @@
           m: "msaa", t: "taa", s: "smaa", c: "static", g: "clamp",
           j: "jitterComp", f: "motionFilter", r: "reset", p: "panel",
           n: "neighbourhood", d: "depthRejection", l: "locks", e: "edgeBlend", a: "specularAA", v: "debug",
-          b: "motionBlur",
+          b: "motionBlur", k: "gt7",
         }[key]
         if (action === "panel") return togglePanel()
         if (action === "reset") return T().reset()
@@ -575,7 +633,7 @@
         const toggle = toggleButtons.get(action)
         if (toggle && !toggle.button.disabled) {
           const value = !toggle.get()
-          const def = [...toggles, ...modernToggles].find(([name]) => name === action)
+          const def = [...toggles, ...modernToggles, ...toneMappingToggles].find(([name]) => name === action)
           def[3](value)
           refresh()
         }

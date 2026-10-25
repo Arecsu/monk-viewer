@@ -25,7 +25,11 @@ import { FullscreenMaterial, GBuffer, Pass } from "postprocessing";
  *
  * Opaque materials therefore write `E(c) = kc / (1 + kc)` per channel. With `k` matching the exposure of the final
  * Reinhard tone mapping, the hardware resolve averages exactly what ends up on screen. This pass then restores linear
- * HDR with the exact inverse `c = E / (k(1 - E))`, so bloom and tone mapping see the usual values.
+ * HDR with the exact inverse `c = E / (k(1 - E))`, so bloom and tone mapping see the usual values. With another tone
+ * mapping (GT7) it is an approximation: the encoding has to stay invertible, a curve that clips to white can't.
+ *
+ * {@link TonemappedResolvePass.encoding} picks the curve: per channel as above, on the largest channel
+ * (`E(c) = kc / (1 + k max(c))`, Karis 2013: keeps the hue of coloured edges) or none (plain linear MSAA).
  *
  * Blending doesn't commute with the encoding, so transparent objects are excluded from the main geometry pass (see
  * {@link TonemappedResolvePass.layer}) and drawn here, on top of the decoded colour, with regular linear blending.
@@ -40,18 +44,41 @@ import { FullscreenMaterial, GBuffer, Pass } from "postprocessing";
 
 const MAX_ENCODED = "0.9995";
 
+/**
+ * The tonemapped resolve curves, see {@link TonemappedResolvePass.encoding}.
+ */
+
+export type TonemappedResolveEncoding = "linear" | "rgb" | "max";
+
+const ENCODINGS: TonemappedResolveEncoding[] = ["linear", "rgb", "max"];
+
 const decodeFragmentShader = /* glsl */ `
 #include <pp_default_output_pars_fragment>
 #include <pp_input_buffer_pars_fragment>
 
 uniform float exposure;
+uniform int encoding;
 
 in vec2 vUv;
 
 void main() {
 
-	highp vec3 e = min(texture(inputBuffer, vUv).rgb, vec3(${MAX_ENCODED}));
-	out_Color = vec4(e / (exposure * (1.0 - e)), 1.0);
+	highp vec3 e = texture(inputBuffer, vUv).rgb;
+
+	if(encoding == 1) {
+
+		e = min(e, vec3(${MAX_ENCODED}));
+		out_Color = vec4(e / (exposure * (1.0 - e)), 1.0);
+
+	} else if(encoding == 2) {
+
+		out_Color = vec4(e / (exposure * (1.0 - min(max(e.r, max(e.g, e.b)), ${MAX_ENCODED}))), 1.0);
+
+	} else {
+
+		out_Color = vec4(e / exposure, 1.0);
+
+	}
 
 }
 `;
@@ -91,12 +118,12 @@ const reactiveMaskMaterial = () => new ShaderMaterial({
 
 class TonemappedResolveMaterial extends FullscreenMaterial {
 
-    constructor(exposure: Uniform<number>) {
+    constructor(exposure: Uniform<number>, encoding: Uniform<number>) {
 
         super({
             name: "TonemappedResolveMaterial",
             fragmentShader: decodeFragmentShader,
-            uniforms: { exposure }
+            uniforms: { exposure, encoding }
         });
 
         // FullscreenMaterial drops to lowp when compiled while the canvas is bound, which RenderPipeline.compile()
@@ -121,6 +148,14 @@ export interface TonemappedResolvePassOptions {
      */
 
     exposure?: number;
+
+    /**
+     * The curve the samples are averaged through, see {@link TonemappedResolvePass.encoding}.
+     *
+     * @defaultValue "rgb"
+     */
+
+    encoding?: TonemappedResolveEncoding;
 
     /**
      * The layer that holds transparent objects. Objects on this layer must not be visible to the main camera layers.
@@ -161,6 +196,12 @@ export class TonemappedResolvePass extends Pass<TonemappedResolveMaterial> {
     private readonly exposureUniform: Uniform<number>;
 
     /**
+     * The index of the encoding in {@link ENCODINGS}, shared like the exposure.
+     */
+
+    private readonly encodingUniform: Uniform<number>;
+
+    /**
      * Controls whether {@link reactiveMask} is rendered. It costs one more draw of the transparent objects.
      */
 
@@ -176,13 +217,14 @@ export class TonemappedResolvePass extends Pass<TonemappedResolveMaterial> {
      * @param options - The options.
      */
 
-    constructor({ exposure = 1.0, layer = 1, reactiveMask = false }: TonemappedResolvePassOptions = {}) {
+    constructor({ exposure = 1.0, encoding = "rgb", layer = 1, reactiveMask = false }: TonemappedResolvePassOptions = {}) {
 
         super("TonemappedResolvePass");
 
         this.layer = layer;
         this.exposureUniform = new Uniform(exposure);
-        this.fullscreenMaterial = new TonemappedResolveMaterial(this.exposureUniform);
+        this.encodingUniform = new Uniform(ENCODINGS.indexOf(encoding));
+        this.fullscreenMaterial = new TonemappedResolveMaterial(this.exposureUniform, this.encodingUniform);
 
         // The geometry pass depth is needed to depth test transparent objects against the opaque ones.
         this.input.gBuffer.add(GBuffer.COLOR);
@@ -215,7 +257,8 @@ export class TonemappedResolvePass extends Pass<TonemappedResolveMaterial> {
     }
 
     /**
-     * The tone mapping exposure that the encoding matches.
+     * The tone mapping exposure that the encoding matches. Higher compresses the highlights harder before the resolve
+     * averages them: smoother bright edges, but dark edges average less like they look on screen.
      */
 
     get exposure(): number {
@@ -231,6 +274,24 @@ export class TonemappedResolvePass extends Pass<TonemappedResolveMaterial> {
     }
 
     /**
+     * The curve the MSAA samples are averaged through: "rgb" per channel, "max" on the largest channel (keeps the hue
+     * of coloured edges, compresses the other channels by the brightest one), "linear" for plain MSAA. Background
+     * clear colours encoded with {@link encodeColor} must be encoded again after a change, black needs nothing.
+     */
+
+    get encoding(): TonemappedResolveEncoding {
+
+        return ENCODINGS[this.encodingUniform.value];
+
+    }
+
+    set encoding(value: TonemappedResolveEncoding) {
+
+        this.encodingUniform.value = ENCODINGS.indexOf(value);
+
+    }
+
+    /**
      * Encodes a colour the same way {@link encodeMaterial} encodes fragments. Use it for clear colours.
      *
      * @param color - A linear colour.
@@ -241,8 +302,10 @@ export class TonemappedResolvePass extends Pass<TonemappedResolveMaterial> {
     encodeColor(color: Color, target = new Color()): Color {
 
         const k = this.exposure;
-        const encode = (c: number) => (Math.max(c, 0.0) * k) / (1.0 + Math.max(c, 0.0) * k);
-        return target.setRGB(encode(color.r), encode(color.g), encode(color.b));
+        const [r, g, b] = [color.r, color.g, color.b].map((c) => Math.max(c, 0.0) * k);
+        const encoding = this.encoding;
+        const encode = (c: number) => encoding === "rgb" ? c / (1.0 + c) : encoding === "max" ? c / (1.0 + Math.max(r, g, b)) : c;
+        return target.setRGB(encode(r), encode(g), encode(b));
 
     }
 
@@ -258,6 +321,7 @@ export class TonemappedResolvePass extends Pass<TonemappedResolveMaterial> {
     encodeMaterial(material: Material): void {
 
         const exposure = this.exposureUniform;
+        const encoding = this.encodingUniform;
         const onBeforeCompile = material.onBeforeCompile;
 
         material.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms, renderer: WebGLRenderer) => {
@@ -272,12 +336,15 @@ export class TonemappedResolvePass extends Pass<TonemappedResolveMaterial> {
             }
 
             shader.uniforms.tonemappedResolveExposure = exposure;
-            shader.fragmentShader = "uniform float tonemappedResolveExposure;\n" + shader.fragmentShader.replace(
-                "#include <dithering_fragment>",
-                `#include <dithering_fragment>
+            shader.uniforms.tonemappedResolveEncoding = encoding;
+            shader.fragmentShader = "uniform float tonemappedResolveExposure;\nuniform int tonemappedResolveEncoding;\n" +
+                shader.fragmentShader.replace(
+                    "#include <dithering_fragment>",
+                    `#include <dithering_fragment>
 				gl_FragColor.rgb = max(gl_FragColor.rgb, 0.0) * tonemappedResolveExposure;
-				gl_FragColor.rgb /= 1.0 + gl_FragColor.rgb;`
-            );
+				if(tonemappedResolveEncoding == 1) gl_FragColor.rgb /= 1.0 + gl_FragColor.rgb;
+				else if(tonemappedResolveEncoding == 2) gl_FragColor.rgb /= 1.0 + max(gl_FragColor.r, max(gl_FragColor.g, gl_FragColor.b));`
+                );
 
         };
 

@@ -1182,6 +1182,22 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
     }
 
     /**
+     * The exposure of the tonemapped space the history is filtered and clamped in, see {@link TemporalAAPassOptions.exposure}.
+     */
+
+    get exposure(): number {
+
+        return this.fullscreenMaterial.uniforms.exposure.value;
+
+    }
+
+    set exposure(value: number) {
+
+        this.fullscreenMaterial.uniforms.exposure.value = value;
+
+    }
+
+    /**
      * The falloff of the Gaussian reconstruction filter, `exp(-k * d²)` with `d` in pixels.
      */
 

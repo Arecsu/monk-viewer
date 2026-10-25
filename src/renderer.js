@@ -11,6 +11,7 @@ import { SpecularAntialiasing } from "./postprocessing/SpecularAntialiasing.js"
 import { MotionBlurPass } from "./postprocessing/MotionBlurPass.js"
 import { VelocityBuffer } from "./postprocessing/VelocityBuffer.js"
 import { BoundedBloomEffect } from "./postprocessing/BoundedBloomEffect.js"
+import { GT7ToneMappingEffect } from "./postprocessing/GT7ToneMappingEffect.js"
 import { RenderPipeline, ClearPass, GeometryPass, EffectPass, ToneMappingEffect, ToneMapping } from "postprocessing"
 // import HDRIMAP from "./envmaps/old_bus_depot_4k_blur.jpg?url"
 import { easeOutQuart, easeInCubic, easeOutCubic } from "js-easing-functions"
@@ -54,6 +55,10 @@ class ThreeSceneManager {
 		// switches it on (data.velocityBuffer), otherwise TAA reprojects the model as one rigid body.
 		this.velocityBuffer = new VelocityBuffer()
 		this.useVelocityBuffer = data.velocityBuffer ?? true
+		// Gran Turismo 7 tone mapping. The previous Reinhard stays in the effect chain, disabled, for comparison: enable
+		// reinhardToneMapping and disable gt7ToneMapping to go back to it.
+		this.gt7ToneMapping = null
+		this.reinhardToneMapping = null
 
 		this.pixelRatioVariation = 1 // this to handle screen DPI changes
 
@@ -266,7 +271,7 @@ class ThreeSceneManager {
 				this.pipeline.add(this.resolvePass)
 			}
 			this.pipeline.add(this.taa)
-			this.motionBlurPass = new MotionBlurPass(this.taa)
+			this.motionBlurPass = new MotionBlurPass(this.taa, { shutter: 0.8 })
 			this.motionBlurPass.enabled = this.motionBlur
 			this.pipeline.add(this.motionBlurPass)
 			const bloom = new BoundedBloomEffect(this.taa, {
@@ -277,6 +282,22 @@ class ThreeSceneManager {
 				levels: 8,
 			})
 			bloom.motionBlurSource = this.motionBlurPass
+			// Graded in aa-lab.html. GT maps 1.0 to 100 cd/m² against a 250 cd/m² SDR white, so it needs more exposure than
+			// Reinhard. The softer shoulder (hardness below 0, never clips) keeps the detail in the brightest reflections.
+			this.gt7ToneMapping = new GT7ToneMappingEffect({
+				exposure: 5.15,
+				contrast: 1.0,
+				blackPoint: -0.02,
+				shadowToe: 1.37,
+				toeLength: 0.25,
+				shoulderStart: 0.37,
+				highlightHardness: -0.08,
+				chromaPreservation: 0.36,
+				saturation: 1.0,
+				vibrance: 0.1,
+			})
+			this.reinhardToneMapping = new ToneMappingEffect({ toneMapping: ToneMapping.REINHARD })
+			this.reinhardToneMapping.enabled = false
 			const effects = new EffectPass(
 				// new SMAAEffect(),
 				// new FXAAEffect({
@@ -286,9 +307,8 @@ class ThreeSceneManager {
 				// 	samples: 12,
 				// }),
 				bloom,
-				new ToneMappingEffect({
-					toneMapping: ToneMapping.REINHARD,
-				}),
+				this.gt7ToneMapping,
+				this.reinhardToneMapping,
 				 new DitheringEffect()
 			)
 			if (this.smaa) {
