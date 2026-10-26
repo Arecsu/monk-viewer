@@ -56,6 +56,12 @@
       <div class="toggles"><button id="hide-panel">hide</button></div>
     </header>
 
+    <h2>Renderer</h2>
+    <div class="row"><label for="backend">backend</label><select id="backend">
+      <option value="auto">auto (acceptance-gated)</option><option value="webgl">WebGL reference</option><option value="webgpu">native WebGPU</option>
+    </select></div>
+    <div id="backend-status">initializing</div>
+
     <h2>Motion</h2>
     <div class="row">
       <label for="motion-mode">motion</label>
@@ -175,6 +181,7 @@
       canvas,
       inputElement: canvas,
       pixelRatio: live ? window.devicePixelRatio : 1,
+      backend: params.get('backend') ?? 'auto',
       // BASE_URL keeps the lab working under any deploy prefix ("/monk-viewer/" in prod, "/" in preview)
       modelUrl: `${import.meta.env.BASE_URL}False_Enlightenment.glb`,
       envmapUrl: "https://raw.githubusercontent.com/Arecsu/model-viewer/monk/packages/shared-assets/environments/old_bus_depot_2k_HDR.jpg",
@@ -188,6 +195,14 @@
       smaa: params.get("smaa") !== "0",
       grazingSpecularClamp: params.get("clamp") !== "0",
       perfSampling: { stabilityDuration: 0, measureDuration: 0.1 },
+      e_backend: status => {
+        document.getElementById('backend-status').textContent = `${status.selected ?? 'pending'} · ${status.phase} · ${status.reason ?? ''}`
+      },
+      e_error: error => {
+        window.lastRendererError = error
+        document.getElementById('backend-status').textContent = `FAILED: ${error.message}`
+        console.error('AA lab renderer failed', error)
+      },
       e_loaded: () => {
         if (!mode.startsWith("taa")) window.mgr.taa.enabled = false
         if (window.mgr.smaaPass) window.mgr.smaaPass.enabled = mode.endsWith("+smaa")
@@ -195,6 +210,14 @@
         applyPreset(params.get("preset") === "legacy" ? "legacy" : "modern")
         setupPanel()
       },
+    })
+
+    document.getElementById('backend').value = params.get('backend') ?? 'auto'
+    document.getElementById('backend').addEventListener('change', event => {
+      const url = new URL(location.href)
+      url.searchParams.set('backend', event.target.value)
+      // New document/canvas, never bind WebGL to a WebGPU-bound canvas or vice versa.
+      location.href = url.href
     })
 
     // The lab compares settings, so it must not be auto-tuned mid-comparison. The normal loop is started directly,

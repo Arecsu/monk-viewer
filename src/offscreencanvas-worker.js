@@ -97,6 +97,7 @@ function start(data) {
 		canvas: data.canvas,
 		inputElement: proxy,
 		pixelRatio: data.pixelRatio,
+		backend: data.backend,
 		modelUrl: data.modelUrl,
 		envmapUrl: data.envmapUrl,
 		minDistance: data.minDistance,
@@ -111,7 +112,9 @@ function start(data) {
 		perfSampling: data.perfSampling,
 		e_interactivityChange: (state) => proxy.m_interactivity(state),
 		e_loaded: (state) => proxy.m_loaded(state),
-		e_ready: (state) => proxy.m_ready(state)
+		e_ready: (state) => proxy.m_ready(state),
+		e_backend: (status) => self.postMessage({ type: 'backend', status }),
+		e_error: (error) => self.postMessage({ type: 'error', error })
 	})
 }
 
@@ -123,8 +126,8 @@ const handlers = {
 	start,
 	makeProxy,
 	event: proxyManager.handleEvent,
-	enableRendering: () => sceneManager.enableRendering(),
-	disableRendering: () => sceneManager.disableRendering(),
+	enableRendering: () => sceneManager?.enableRendering(),
+	disableRendering: () => sceneManager?.disableRendering(),
 	dispose: () => {
 		if (sceneManager) {
 		  sceneManager.dispose();
@@ -138,7 +141,9 @@ self.onmessage = function (e) {
 	if (typeof fn !== "function") {
 		throw new Error("no handler for type: " + e.data.type)
 	}
-	fn(e.data)
+	try { fn(e.data) } catch (error) {
+		self.postMessage({ type: 'error', error: { message: String(error?.message ?? error), recoverable: true } })
+	}
 }
 
 // The main thread must not send proxy/size/start messages until the dispatcher is installed.

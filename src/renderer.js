@@ -1,4 +1,5 @@
 import * as THREE from "three"
+import { chooseBackend, normalizeBackend } from "./BackendSelection.js"
 import { OrbitControls } from "./OrbitControls.js"
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js"
 import { HDRJPGLoader } from "@monogrid/gainmap-js"
@@ -18,6 +19,18 @@ import { easeOutQuart, easeInCubic, easeOutCubic } from "js-easing-functions"
 
 class ThreeSceneManager {
 	constructor(data) {
+		this.options = data
+		this.disposed = false
+		this.frameRequest = null
+		this.interactionTimer = null
+		this.interactionDisposers = []
+		this.abortController = new AbortController()
+		this.environmentResource = null
+		this.backend = normalizeBackend(data.backend ?? 'auto')
+		this.backendStatus = { requested: this.backend, selected: null, phase: 'initializing', reason: null }
+		this.e_backend = data.e_backend || (() => {})
+		this.e_error = data.e_error || (() => {})
+		this.canvasBound = false
 		this.canvas = data.canvas
 		this.inputElement = data.inputElement
 		this.modelUrl = data.modelUrl
@@ -28,8 +41,9 @@ class ThreeSceneManager {
 			disableMSAA: data.lowPerformanceSettings?.disableMSAA ?? false,
 			lowResolution: data.lowPerformanceSettings?.lowResolution ?? false,
 		}
-		this.baseLoadPixelRatio = data.pixelRatio ?? window.devicePixelRatio
-		this.initialRenderPixelRatio = this.lowPerformanceSettings.lowResolution ? data.pixelRatio / 2 : this.baseLoadPixelRatio
+		this.baseLoadPixelRatio = data.pixelRatio ?? globalThis.devicePixelRatio ?? 1
+		this.baseDisplayPixelRatio = globalThis.devicePixelRatio ?? 1
+		this.initialRenderPixelRatio = this.lowPerformanceSettings.lowResolution ? this.baseLoadPixelRatio / 2 : this.baseLoadPixelRatio
 		this.performantRenderPixelRatio = null
 		// this.msaaSamples = this.lowPerformanceSettings.disableMSAA ? 0 : 4;
 		// this.msaaSamples = this.lowPerformanceSettings.disableMSAA ? 0 : 0;
@@ -73,8 +87,8 @@ class ThreeSceneManager {
 		}
 
 		this.perfSampling = {
-			stabilizationDuration: data.perfSampling.stabilityDuration || 1.0, // Warm-up period in seconds
-			measureDuration: data.perfSampling.measureDuration || 0.5, // Active measurement window in seconds
+			stabilizationDuration: data.perfSampling?.stabilityDuration ?? 1.0, // Warm-up period in seconds
+			measureDuration: data.perfSampling?.measureDuration ?? 0.5, // Active measurement window in seconds
 		}
 
 		this.renderer = null
@@ -144,32 +158,83 @@ class ThreeSceneManager {
 		this.isRendering = false;
 
 		this.hasAborted = false
-		this.initScene()
+		this.ready = this.initScene()
 	}
 
 	// preserves the model in view completely at vertical aspect ratios
 	cameraMultiplier(ratio) { 
 		return (ratio) <= 1 ? 1.0 : 1.0 + 0.2 * (ratio - 1)  }
 
-	initScene() {
-		this.setupRenderer()
+	async initScene() {
 		this.setupCamera()
 		this.setupControls()
 		this.setupScene()
-		// this.setupLighting();
+		try {
+			await this.setupRenderer()
+			if (this.disposed) return this
+			await this.setupPostProcessing()
+			if (this.disposed) return this
+			await this.loadAssets()
+			if (this.disposed) return this
+			if (this.backendStatus.selected === 'webgpu') {
+				this.handleResize(true)
+				// Compile/upload on a staging canvas before binding the user's canvas.
+				this.pipeline.render({ present: false })
+				await this.renderer.backend.device.queue.onSubmittedWorkDone()
+				if (this.nativeErrors.length) throw new Error(this.nativeErrors.join('; '))
+				if (this.disposed) return this
+				const { CanvasTarget } = await import('three/webgpu')
+				this.renderer.setCanvasTarget(new CanvasTarget(this.canvas))
+				this.canvasBound = true
+				this.handleResize(true)
+				this.pipeline.reset()
+			}
+			this.isReady = true
+			this.reportBackend({ phase: 'ready' })
+			this.e_ready(true)
+			if (this.disposed) return this
+			if (this.shouldStart && !this.hasStarted) {
+				this.hasStarted = true
+				this.startPerformanceSamplingLoop()
+			}
+		} catch (error) { if (!this.disposed) this.abortLoading(error) }
+		return this
+	}
 
-		Promise.all([this.setupPostProcessing(), this.loadAssets()])
-			.then(() => {
-				this.isReady = true;
-				this.e_ready(true);
-				if ((this.startupMode === "auto") || (this.shouldStart && !this.hasStarted)) {
-					this.startPerformanceSamplingLoop();
-					this.hasStarted = true;
-				}
-			})
-			.catch((error) => {
-				this.abortLoading(error);
-			});
+	reportBackend(update) {
+		this.backendStatus = { ...this.backendStatus, ...update }
+		this.e_backend({ ...this.backendStatus })
+	}
+
+	handleBackendFailure(error, phase = 'failed') {
+		if (this.disposed || this.hasAborted) return
+		this.hasAborted = true
+		this.pauseRendering()
+		this.pipeline?.reset?.()
+		this.reportBackend({ phase, reason: String(error?.message ?? error) })
+		this.e_error({ message: String(error?.message ?? error), backend: this.backendStatus.selected,
+			needsCanvasReplacement: this.canvasBound, recoverable: this.backendStatus.selected === 'webgpu' })
+	}
+
+	pauseRendering() {
+		const wasRendering = this.isRendering
+		this.isRendering = false
+		if (this.frameRequest !== null) cancelAnimationFrame(this.frameRequest)
+		this.frameRequest = null
+		return wasRendering
+	}
+
+	resumeRendering() {
+		if (this.disposed || this.hasAborted || this.isRendering || !this.isReady) return
+		this.isRendering = true
+		this.startRenderLoop()
+	}
+
+	scheduleFrame(callback) {
+		if (!this.disposed && this.isRendering) this.frameRequest = requestAnimationFrame(() => {
+			this.frameRequest = null
+			try { callback() } catch (error) { this.handleBackendFailure(error) }
+		})
 	}
 
 	enableRendering() {
@@ -184,7 +249,38 @@ class ThreeSceneManager {
 		this.shouldStart = false;
 	 }
 
-	setupRenderer() {
+	async setupRenderer() {
+		const choice = chooseBackend(this.backend)
+		this.reportBackend({ ...choice, phase: 'initializing' })
+		if (choice.selected === 'webgpu') {
+			let native
+			try {
+				const GPU = await import('three/webgpu')
+				if (this.disposed) return
+				const staging = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(1, 1) : document.createElement('canvas')
+				native = new GPU.WebGPURenderer({ canvas: staging, antialias: false, depth: false, stencil: false,
+					powerPreference: 'high-performance', trackTimestamp: true })
+				// r186 installs an implicit WebGL fallback; ours is a separate, observable reference pipeline.
+				native._getFallback = null
+				await native.init()
+				if (this.disposed) { native.dispose(); return }
+				if (!native.backend.isWebGPUBackend) throw new Error('Native WebGPU backend required')
+				this.nativeErrors = []
+				native.onError = info => { this.nativeErrors.push(info.message); if (this.isReady) this.handleBackendFailure(new Error(info.message)) }
+				native.onDeviceLost = info => this.handleBackendFailure(new Error(info.message), 'device-lost')
+				this.renderer = native
+				this.renderer.setPixelRatio(this.initialRenderPixelRatio)
+				this.renderer.toneMapping = GPU.NoToneMapping
+				this.renderer.toneMappingExposure = 1.6
+				this.camera.coordinateSystem = native.coordinateSystem
+				this.camera.updateProjectionMatrix()
+				return
+			} catch (error) {
+				native?.dispose()
+				if (this.disposed) return
+				this.reportBackend({ selected: 'webgl', phase: 'initializing', reason: `webgpu-init-failed: ${error.message}` })
+			}
+		}
 		this.renderer = new THREE.WebGLRenderer({
 			powerPreference: "high-performance",
 			antialias: false,
@@ -193,6 +289,7 @@ class ThreeSceneManager {
 			depth: false,
 		})
 
+		this.canvasBound = true
 		this.renderer.setPixelRatio(this.initialRenderPixelRatio)
 		this.renderer.toneMappingExposure = 1.6
 	}
@@ -227,7 +324,14 @@ class ThreeSceneManager {
 		this.scene.add(light)
 	}
 
-	setupPostProcessing() {
+	async setupPostProcessing() {
+		if (this.backendStatus.selected === 'webgpu') {
+			const { WebGpuPipeline } = await import('./webgpu/WebGpuPipeline.js')
+			if (this.disposed) return
+			this.pipeline = new WebGpuPipeline(this)
+			await this.pipeline.compile()
+			return
+		}
 		return new Promise((resolve, reject) => {
 			this.pipeline = new RenderPipeline(this.renderer)
 			// Smooths what MSAA quantizes into steps, e.g. sub-pixel edges sliding across pixel rows.
@@ -331,27 +435,29 @@ class ThreeSceneManager {
 		})
 	}
 
-	resetPostProcessing() {
-		this.pipeline.dispose()
-		this.pipeline = null
-		this.setupPostProcessing()
-		// this.handleResize(true);
-		// ↑ unnecesary, the main render loop already does it.
-		// plus, it makes the screen flash
+	async resetPostProcessing() {
+		const resume = this.pauseRendering()
+		try {
+			this.pipeline?.dispose()
+			this.pipeline = null
+			await this.setupPostProcessing()
+			if (this.disposed) return
+			if (this.backendStatus.selected === 'webgpu' && this.model) this.pipeline.prepare(this.model)
+			this.handleResize(true)
+		} catch (error) { this.handleBackendFailure(error) }
+		finally { if (resume) this.resumeRendering() }
 	}
 
 	setupInteraction() {
-		this.inputElement.addEventListener("contextmenu", (e) => e.preventDefault())
-
-		// Mouse events
-		this.inputElement.addEventListener("mousedown", this.handleInputStart.bind(this))
-		this.inputElement.addEventListener("mousemove", this.handleInputMove.bind(this))
-		this.inputElement.addEventListener("mouseup", this.handleInputEnd.bind(this))
-
-		// Touch events
-		this.inputElement.addEventListener("touchstart", this.handleInputStart.bind(this))
-		this.inputElement.addEventListener("touchmove", this.handleInputMove.bind(this))
-		this.inputElement.addEventListener("touchend", this.handleInputEnd.bind(this))
+		if (this.interactionDisposers.length) return
+		const listen = (type, listener) => {
+			this.inputElement.addEventListener(type, listener)
+			this.interactionDisposers.push(() => this.inputElement.removeEventListener(type, listener))
+		}
+		listen('contextmenu', event => event.preventDefault())
+		for (const type of ['mousedown', 'touchstart']) listen(type, this.handleInputStart.bind(this))
+		for (const type of ['mousemove', 'touchmove']) listen(type, this.handleInputMove.bind(this))
+		for (const type of ['mouseup', 'touchend']) listen(type, this.handleInputEnd.bind(this))
 	}
 
 	handleInputStart(event) {
@@ -440,7 +546,6 @@ class ThreeSceneManager {
 		} else {
 			// Exiting interactive mode: partial deceleration
 			this.controls.enabled = false;
-			console.log(getComputedStyle(this.inputElement).touchAction)
 			if (this.returnModelAnimation.isActive) {
 				// Start deceleration to 20% towards initial from current position
 				this.decelerationAnimation.startQuaternion = this.model.quaternion.clone();
@@ -475,7 +580,7 @@ class ThreeSceneManager {
 
 	abortLoading(error) {
 		console.error("Aborting scene loading:", error)
-		this.hasAborted = true
+		this.handleBackendFailure(error)
 		// Optionally: hide the canvas, show an error message, etc.
 		// this.canvas.style.display = "none";
 	}
@@ -490,7 +595,8 @@ class ThreeSceneManager {
 			loader.load(
 				this.modelUrl,
 				async (gltf) => {
-					if (this.hasAborted) return
+					try {
+					if (this.hasAborted || this.disposed) { disposeObject(gltf.scene); resolve(); return }
 					this.model = gltf.scene
 					// model.rotation.y -= 0.6;
 					// model.rotation.x += 0.25;
@@ -504,16 +610,20 @@ class ThreeSceneManager {
 					}
 				});
 				// First: it gives every mesh its own material, which the other patches then apply to
-				this.velocityBuffer.prepare(this.model)
-				// Before scene.add(), so the GeometryPass shader plugin wraps the encoding hook
-				this.resolvePass?.prepare(this.model)
-				this.grazingClamp.prepare(this.model)
-				this.specularAA.prepare(this.model)
+				if (this.backendStatus.selected === 'webgpu') {
+					this.pipeline.prepare(this.model)
+				} else {
+					this.velocityBuffer.prepare(this.model)
+					this.resolvePass?.prepare(this.model)
+					this.grazingClamp.prepare(this.model)
+					this.specularAA.prepare(this.model)
+				}
 				if (this.taa) this.taa.trackedObject = this.model
 
 					this.optimizeModelTextures(this.model)
 
-					await this.renderer.compileAsync(this.model, this.camera, this.scene)
+					if (this.backendStatus.selected !== 'webgpu') await this.renderer.compileAsync(this.model, this.camera, this.scene)
+					if (this.disposed) { disposeObject(this.model); resolve(); return }
 
 					// this.mixer = new THREE.AnimationMixer(this.model)
 					// const action = this.mixer.clipAction(gltf.animations[0])
@@ -521,6 +631,7 @@ class ThreeSceneManager {
 
 					this.scene.add(this.model)
 					resolve()
+					} catch (error) { reject(error) }
 				},
 				undefined,
 				(error) => {
@@ -531,6 +642,7 @@ class ThreeSceneManager {
 	}
 
 	optimizeModelTextures(model) {
+		if (this.backendStatus.selected === 'webgpu') { this.optimizeNativeTextures?.(this.renderer, model); return }
 		model.traverse((child) => {
 			if (child.isMesh) {
 				//  child.receiveShadow = true;
@@ -551,12 +663,23 @@ class ThreeSceneManager {
 		}
 	}
 
-	loadHDREnvironment() {
+	async loadHDREnvironment() {
+		if (this.backendStatus.selected === 'webgpu') {
+			const { loadWebGpuEnvironment, optimizeWebGpuTextures } = await import('./webgpu/Environment.js')
+			this.optimizeNativeTextures = optimizeWebGpuTextures
+			const resource = await loadWebGpuEnvironment(this.renderer, this.envmapUrl, { signal: this.abortController.signal })
+			if (this.disposed) { resource.dispose(); return }
+			this.environmentResource = resource
+			this.scene.environment = resource.texture
+			if (this.model) optimizeWebGpuTextures?.(this.renderer, this.model)
+			return
+		}
 		return new Promise((resolve, reject) => {
 			const loader = new HDRJPGLoader(this.renderer)
 			loader.load(
 				this.envmapUrl,
 				(hdri) => {
+					if (this.disposed) { hdri.dispose(); resolve(); return }
 					const hdrTexture = hdri.renderTarget.texture
 					this.configureHDRTexture(hdrTexture)
 					// this.scene.backgroundBlurriness = 0.8;
@@ -638,7 +761,7 @@ class ThreeSceneManager {
 
 			// Warm-up phase
 			if (!isMeasuring && this.clock.getElapsedTime() < warmupEnd) {
-				requestAnimationFrame(measureFrame)
+				this.scheduleFrame(measureFrame)
 				return
 			}
 
@@ -661,10 +784,10 @@ class ThreeSceneManager {
 					// Measure again with the new settings, after the buffers are recreated
 					isMeasuring = false
 					warmupEnd = this.clock.getElapsedTime() + 0.2
-					requestAnimationFrame(measureFrame)
+					this.scheduleFrame(measureFrame)
 				}
 			} else {
-				requestAnimationFrame(measureFrame)
+				this.scheduleFrame(measureFrame)
 			}
 		}
 
@@ -672,12 +795,13 @@ class ThreeSceneManager {
 		this.clock.start()
 		this.setupInteraction()
 		this.e_loaded(true)
+		if (this.disposed) return
 		this.isRendering = true
-		setTimeout(() => // signal to change cursor in main.ts
+		this.interactionTimer = setTimeout(() => // signal to change cursor in main.ts
 			this.e_interactivityChange(this.isInteractive), 
 			this.initDelayInteractive * 1000
 		)
-		requestAnimationFrame(measureFrame)
+		this.scheduleFrame(measureFrame)
 	}
 
 	startRenderLoop() {
@@ -694,9 +818,9 @@ class ThreeSceneManager {
 			this.updateScene()
 			this.pipeline.render()
 			// this.renderer.render(this.scene, this.camera);
-			requestAnimationFrame(render)
+			this.scheduleFrame(render)
 		}
-		requestAnimationFrame(render)
+		if (this.frameRequest === null) this.scheduleFrame(render)
 	}
 
 	getWorkingPixelRatio() {
@@ -706,14 +830,16 @@ class ThreeSceneManager {
 		if (this.initialRenderPixelRatio) {
 			return this.initialRenderPixelRatio * this.pixelRatioVariation
 		}
-		return window.devicePixelRatio
+		return globalThis.devicePixelRatio ?? 1
 	}
 
 	handleResize(forceResize = false) {
 		if (!this.renderer) return; // Exit early if renderer is disposed
 		
 		const { clientWidth: width, clientHeight: height, pixelRatio } = this.inputElement;
-		this.pixelRatioVariation = (pixelRatio / this.baseLoadPixelRatio) || 1;
+		if (!(width > 0 && height > 0)) return;
+		this.pixelRatioVariation = pixelRatio ? pixelRatio / this.baseLoadPixelRatio :
+			(globalThis.devicePixelRatio ?? 1) / this.baseDisplayPixelRatio;
 		const workingPixelRatio = this.getWorkingPixelRatio();
 		const now = performance.now();
 
@@ -747,6 +873,7 @@ class ThreeSceneManager {
 	}
 
 	updateRendererSize(width, height, workingPixelRatio) {
+		width = Math.max(1, width); height = Math.max(1, height)
 		this.renderer.setPixelRatio(workingPixelRatio || 1)
 		this.renderer.setSize(width, height, false)
 		this.pipeline.setSize(width, height, false)
@@ -827,7 +954,18 @@ class ThreeSceneManager {
 	}
 
 	dispose() {
-		this.isRendering = false; // Stop the render loop first
+		if (this.disposed) return
+		this.disposed = true
+		this.pauseRendering()
+		this.abortController.abort()
+		clearTimeout(this.interactionTimer)
+		for (const remove of this.interactionDisposers.splice(0)) remove()
+		this.pipeline?.dispose()
+		this.pipeline = null
+		this.environmentResource?.dispose()
+		if (this.environmentResource && this.scene) this.scene.environment = null
+		this.environmentResource = null
+		this.reportBackend({ phase: 'disposed' })
 
 		if (this.renderer) {
 		  this.renderer.dispose();
@@ -847,21 +985,7 @@ class ThreeSceneManager {
 		}
   
 		if (this.scene) {
-		  this.scene.traverse((object) => {
-			 if (object.geometry) {
-				object.geometry.dispose();
-			 }
-			 if (object.material) {
-				if (Array.isArray(object.material)) {
-				  object.material.forEach((mat) => mat.dispose());
-				} else {
-				  object.material.dispose();
-				}
-			 }
-			 if (object.texture) {
-				object.texture.dispose();
-			 }
-		  });
+		  disposeObject(this.scene);
 		  this.scene = null;
 		}
   
@@ -880,6 +1004,20 @@ class ThreeSceneManager {
 		this.model = null;
 		this.initialModelRotation = null;
 	 }
+}
+
+function disposeObject(root) {
+	const textures = new Set(), materials = new Set(), geometries = new Set()
+	root?.traverse(object => {
+		if (object.geometry) geometries.add(object.geometry)
+		for (const material of (Array.isArray(object.material) ? object.material : [object.material])) if (material) {
+			materials.add(material)
+			for (const value of Object.values(material)) if (value?.isTexture) textures.add(value)
+		}
+	})
+	textures.forEach(texture => texture.dispose())
+	materials.forEach(material => material.dispose())
+	geometries.forEach(geometry => geometry.dispose())
 }
 
 // Initialization function
