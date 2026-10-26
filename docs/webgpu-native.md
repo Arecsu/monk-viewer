@@ -1,8 +1,8 @@
 # Native WebGPU backend
 
-Status: **implemented and rendering end to end, not yet the default.** The WebGL pipeline is untouched and remains the
-reference and the fallback. `auto` deliberately keeps selecting WebGL until the acceptance gate is flipped
-(`WEBGPU_ACCEPTED` in `src/BackendSelection.js`); this is a product decision, not a bug.
+Status: **implemented, rendering end to end, and preferred by `auto`.** The WebGL pipeline is untouched and remains the
+reference and the fallback. `WEBGPU_ACCEPTED` in `src/BackendSelection.js` was flipped on 2026-10-26 as a product
+decision, ahead of the open acceptance items listed at the end of this document.
 
 ## What runs natively
 
@@ -25,7 +25,7 @@ the component interfaces. The lane history is in `docs/webgpu-lanes.md`.
 ## Backend selection
 
 ```js
-chooseBackend('auto')    // webgl + reason "webgpu-acceptance-pending" until WEBGPU_ACCEPTED
+chooseBackend('auto')    // native where navigator.gpu exists, otherwise webgl + reason "webgpu-unavailable"
 chooseBackend('webgpu')  // native, or webgl + reason "webgpu-unavailable"
 chooseBackend('webgl')   // reference
 ```
@@ -96,7 +96,8 @@ Measured parity and timings, with method and caveats: `docs/webgpu-parity.md` an
 
 ## Known limitations
 
-* `auto` still selects WebGL; `WEBGPU_ACCEPTED` is false pending the acceptance criteria below.
+* `auto` selects native WebGPU although the acceptance items below are still open; init failure and recoverable
+  runtime errors fall back to WebGL on a fresh canvas.
 * Native SMAA was caught failing to compile on a real device during this session (malformed WGSL in the weights
   shader). The pipeline now *validates* both SMAA stages at startup and disables SMAA with an observable
   `backendStatus.degraded` entry instead of failing initialization; the shader has since been reworked, but the SMAA
@@ -109,9 +110,9 @@ Measured parity and timings, with method and caveats: `docs/webgpu-parity.md` an
 * The model's glass and opaque meshes are assumed to use standard/physical materials; anything else throws instead of
   rendering incorrectly.
 
-## Acceptance criteria for flipping `auto`
+## Open acceptance items
 
-Not met yet. Required before flipping `WEBGPU_ACCEPTED`:
+`auto` was flipped before these were met; they remain the evidence still owed for the native default:
 
 1. The harness gate must be made able to certify the production chain: either a dither-off condition or a
    block-averaged visible-fraction statistic, because the documented parity numbers (code space) exceed the current

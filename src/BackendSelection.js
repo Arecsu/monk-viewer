@@ -1,5 +1,5 @@
-// Promotion is deliberately gated by final-image, temporal, lifecycle and performance evidence.
-export const WEBGPU_ACCEPTED = false;
+// `auto` prefers native WebGPU where the browser exposes it; init failure or a recoverable runtime error falls back to WebGL.
+export const WEBGPU_ACCEPTED = true;
 export const BACKENDS = Object.freeze(['auto', 'webgl', 'webgpu']);
 
 export function normalizeBackend(value = 'auto') {

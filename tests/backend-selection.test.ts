@@ -4,12 +4,15 @@ import { chooseBackend, normalizeBackend, WEBGPU_ACCEPTED } from '../src/Backend
 import { webglProjection } from '../src/webgpu/Common.js';
 import { PerspectiveCamera, WebGPUCoordinateSystem, WebGLCoordinateSystem } from 'three/webgpu';
 
- test('automatic native preference is acceptance gated, not inferred from API availability', () => {
-  assert.equal(WEBGPU_ACCEPTED, false);
+ test('automatic selection prefers native WebGPU where available and stays gate-controlled', () => {
+  assert.equal(WEBGPU_ACCEPTED, true);
   assert.deepEqual(chooseBackend('auto', { webgpuAvailable: true }), {
-    requested: 'auto', selected: 'webgl', reason: 'webgpu-acceptance-pending',
+    requested: 'auto', selected: 'webgpu', reason: 'accepted-native-preference',
   });
-  assert.equal(chooseBackend('auto', { webgpuAvailable: true, accepted: true }).selected, 'webgpu');
+  assert.deepEqual(chooseBackend('auto', { webgpuAvailable: false }), {
+    requested: 'auto', selected: 'webgl', reason: 'webgpu-unavailable',
+  });
+  assert.equal(chooseBackend('auto', { webgpuAvailable: true, accepted: false }).reason, 'webgpu-acceptance-pending');
   assert.equal(chooseBackend('webgpu', { webgpuAvailable: true }).selected, 'webgpu');
   assert.equal(chooseBackend('webgl', { webgpuAvailable: true, accepted: true }).selected, 'webgl');
 });
