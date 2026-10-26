@@ -85,11 +85,15 @@ await parity.sweepTaa({});
 await parity.benchmark({ resolution: [900, 600], rounds: 3 });
 ```
 
-Measured parity and timings, with method and caveats: `docs/webgpu-parity.md`.
+Measured parity and timings, with method and caveats: `docs/webgpu-parity.md` and `docs/webgpu-performance.md`.
 
 ## Known limitations
 
 * `auto` still selects WebGL; `WEBGPU_ACCEPTED` is false pending the acceptance criteria below.
+* Native SMAA was caught failing to compile on a real device during this session (malformed WGSL in the weights
+  shader). The pipeline now *validates* both SMAA stages at startup and disables SMAA with an observable
+  `backendStatus.degraded` entry instead of failing initialization; the shader has since been reworked, but the SMAA
+  path is not re-verified on a device yet.
 * Isolated per-frame WebGPU timestamps are not comparable to the WebGL timer queries (see the parity report); only
   sustained throughput is used for the performance claim.
 * Skinning and morph targets are not carried into motion vectors (the reference has the same limitation).

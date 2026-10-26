@@ -45,6 +45,11 @@ The history converges to the same steady image: the transient edge difference sh
 of drifting, which is the expected behaviour of two implementations of the same temporal filter with different jitter
 phase and sample rounding.
 
+> **Note (superseded):** the throughput table below was measured before the two full-resolution pass cuts
+> (fused decode+depth export, direct-to-canvas tone mapping). See `docs/webgpu-performance.md` for the current
+> state, the single-renderer measurement protocol, and the fact that a full-viewport (3360×1866) whole-pipeline
+> comparison is not measured.
+
 ## Performance
 
 Exclusive protocol: the production loops are paused and verified quiescent, the queue is drained, both backends run
