@@ -245,13 +245,17 @@ export class WebGpuTemporalAA {
     this._black.needsUpdate = true;
 
     this._targets = [createHistoryTarget(1, 1), createHistoryTarget(1, 1)];
+    // Explicit dummy UVs disable TextureNode's automatic matrix uniforms. Every read supplies its own logical UV
+    // or pixel and performs the single top-left storage conversion itself; raw render-target textures have no useful
+    // matrix, so the default UV would only add unused mat3 uniforms to every sample/load clone.
+    const noMatrixUV = TSL.vec2(0);
     this._textureNodes = {
-      color: TSL.texture(),
-      depth: TSL.texture(),
-      velocity: TSL.texture(this._black),
-      reactive: TSL.texture(this._black),
-      history: TSL.texture(this._targets[0].textures[0]),
-      state: TSL.texture(this._targets[0].textures[2])
+      color: TSL.texture(undefined, noMatrixUV),
+      depth: TSL.texture(undefined, noMatrixUV),
+      velocity: TSL.texture(this._black, noMatrixUV),
+      reactive: TSL.texture(this._black, noMatrixUV),
+      history: TSL.texture(this._targets[0].textures[0], noMatrixUV),
+      state: TSL.texture(this._targets[0].textures[2], noMatrixUV)
     };
 
     this._width = 1;

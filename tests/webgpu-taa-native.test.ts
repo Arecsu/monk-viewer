@@ -29,6 +29,62 @@ function makeTaa(options: Record<string, unknown> = {}): WebGpuTemporalAA {
   return new WebGpuTemporalAA({}, { ...options, camera, scene });
 }
 
+
+// Full TSL graph build without a device. WGSLNodeBuilder is the same class the native backend uses, so this catches
+// lazy node materialization and texture-binding regressions that merely executing callback bodies cannot.
+function buildTemporalAAWGSL() {
+  const width = 19, height = 13;
+  const renderer = new GPU.WebGPURenderer({ antialias: false, canvas: { width, height, style: {} } });
+  // The backend is not initialized; feature queries only affect generated texture helpers, not the shader graph.
+  renderer.hasFeature = () => false;
+  const target = new GPU.RenderTarget(width, height, { count: 3, depthBuffer: false });
+  target.textures[0].name = "history";
+  target.textures[1].name = "output";
+  target.textures[2].name = "state";
+  renderer.setRenderTarget(target);
+  const camera = makeCamera();
+  camera.position.set(0, 0, 2);
+  camera.updateMatrixWorld();
+  const scene = new GPU.Scene();
+  const taa = new WebGpuTemporalAA(renderer, { camera, scene });
+  taa.setSize(width, height);
+  const input = new GPU.RenderTarget(width, height, { depthBuffer: true });
+  input.depthTexture = new GPU.DepthTexture(width, height, GPU.FloatType);
+  taa._textureNodes.color.value = input.texture;
+  taa._textureNodes.depth.value = input.depthTexture;
+  const builder = new GPU.WGSLNodeBuilder(taa._quad, renderer);
+  builder.scene = scene;
+  builder.camera = camera;
+  builder.build();
+  return { taa, target, input, builder, source: builder.fragmentShader };
+}
+
+function wgslVariableDepths(source: string) {
+  const lines = source.split("\n");
+  const depths: number[] = [];
+  let depth = 0;
+  for (const line of lines) {
+    depths.push(depth);
+    for (const character of line.replace(/\/\/.*$/, "")) {
+      if (character === "{") depth++;
+      else if (character === "}") depth--;
+    }
+  }
+  return (name: string) => {
+    const assignments: Array<{ depth: number; line: number }> = [];
+    const reads: Array<{ depth: number; line: number }> = [];
+    const declaration = new RegExp(`^var<private>\\s+${name}\\s*:`);
+    const assignment = new RegExp(`^\\s*${name}\\s*=`);
+    const word = new RegExp(`\\b${name}\\b`);
+    lines.forEach((line, index) => {
+      if (declaration.test(line)) return;
+      if (assignment.test(line)) assignments.push({ depth: depths[index], line: index });
+      else if (word.test(line)) reads.push({ depth: depths[index], line: index });
+    });
+    return { assignments, reads };
+  };
+}
+
 const FULL = [0, 0, 1, 1];
 
 test("reference defaults are present and every tuning option is mutable", () => {
@@ -449,5 +505,41 @@ test("bounded fast-path certifies a growing footprint and falls back safely", ()
     taa.dispose();
     mesh.geometry.dispose();
     (mesh.material as MeshBasicMaterial).dispose();
+  }
+});
+
+test("generated WGSL materializes every cross-branch expression before its reads", () => {
+  const { taa, target, input, source } = buildTemporalAAWGSL();
+  try {
+    assert.ok(source.length > 10000, `fragment WGSL unexpectedly short: ${source.length}`);
+    assert.match(source, /@location\( 0 \) m0 : vec4<f32>/);
+    assert.match(source, /@location\( 1 \) m1 : vec3<f32>/);
+    assert.match(source, /@location\( 2 \) m2 : vec4<f32>/);
+
+    // Explicit dummy UVs on the raw input nodes must suppress TextureNode's automatic mat3 matrix uniforms.
+    for (const node of Object.values(taa._textureNodes)) assert.equal(node.updateMatrix, false);
+    assert.equal(source.includes("mat3x3<f32>"), false);
+
+    const depths = wgslVariableDepths(source);
+    const names = ["taaCurrent", "taaCurrentDepth", "taaMotionData", "taaMotion", "taaHistoryUv",
+      "taaVelocityPixels", "taaLockWeight", "taaTrusted", "taaStoredState", "taaGamma", "taaRawHistory",
+      "taaResolvedHistory"];
+    for (const name of names) {
+      const { assignments, reads } = depths(name);
+      assert.ok(assignments.length > 0, `${name} has no assignment in generated WGSL`);
+      assert.ok(reads.length > 0, `${name} has no read in generated WGSL`);
+      const firstAssignment = assignments.reduce((a, b) => a.line < b.line ? a : b);
+      const firstRead = reads.reduce((a, b) => a.line < b.line ? a : b);
+      // A lazy TSL expression is emitted where first built. If that is a nested conditional branch and a later outer
+      // branch reads it, the variable is uninitialized on skipped paths (the constant-HDR static-convergence bug).
+      assert.ok(firstAssignment.line < firstRead.line, `${name} is read before its first assignment`);
+      const minimumReadDepth = Math.min(...reads.map((read) => read.depth));
+      assert.ok(firstAssignment.depth <= minimumReadDepth,
+        `${name} is assigned at depth ${firstAssignment.depth} but read at depth ${minimumReadDepth}`);
+    }
+  } finally {
+    taa.dispose();
+    input.dispose();
+    target.dispose();
   }
 });

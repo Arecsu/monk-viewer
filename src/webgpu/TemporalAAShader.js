@@ -252,13 +252,13 @@ export function createTemporalAAMaterial(uniforms, textures) {
         });
       }
 
-      const motionData = reproject(closestUv, closestDepth);
+      const motionData = reproject(closestUv, closestDepth).toVar('taaMotionData');
       const historyUv = uv.add(motionData.xy.sub(closestUv))
-        .add(jitterOffset.sub(previousJitter).mul(jitterCompensation).mul(texelSize)).toVar();
+        .add(jitterOffset.sub(previousJitter).mul(jitterCompensation).mul(texelSize)).toVar('taaHistoryUv');
 
       // The motion this pixel is reprojected with, in pixels. Stored for the motion blur and the motion validation.
-      const velocityPixels = closestUv.sub(motionData.xy).div(texelSize).toVar();
-      const motion = length(historyUv.sub(uv).div(texelSize));
+      const velocityPixels = closestUv.sub(motionData.xy).div(texelSize).toVar('taaVelocityPixels');
+      const motion = length(historyUv.sub(uv).div(texelSize)).toVar('taaMotion');
 
       // Disabled TAA is a pure bypass: no jitter, no filtering. The pipeline reports no motion and uses full bounds,
       // so the state is not consumed; it is still written fresh rather than leaving stale motion behind.
@@ -304,8 +304,11 @@ export function createTemporalAAMaterial(uniforms, textures) {
           });
         }
 
-        const current = filtered.div(filterWeight);
-        const currentDepth = motionData.w;
+        // Concrete variable: TSL otherwise materializes this lazy expression where it is first built (inside a
+        // conditional history branch) and the final unconditional mix reads an uninitialized var when that branch is
+        // skipped, e.g. static convergence sets clipHistory false.
+        const current = filtered.div(filterWeight).toVar('taaCurrent');
+        const currentDepth = motionData.w.toVar('taaCurrentDepth');
 
         // Glass and other transparent surfaces (FSR 2 "reactive mask"): their reflections and scratches move on
         // their own, and the depth behind them says nothing about them.
@@ -345,7 +348,9 @@ export function createTemporalAAMaterial(uniforms, textures) {
           // Geometric validation (Nehab et al. 2007). Only the texel the lookup lands in counts.
           const stateSize = textureSizeInt(state);
           const stateCoord = clamp(ivec2(historyUv.mul(vec2(stateSize))), ivec2(0), stateSize.sub(1));
-          const storedState = loadLogical(state, stateCoord);
+          // One fetch shared by depth validation, motion validation and the lock update; keep it at this common
+          // scope so no branch can materialize it after a sibling has already read it.
+          const storedState = loadLogical(state, stateCoord).toVar('taaStoredState');
           const match = float(1.0).toVar();
 
           If(depthRejection, () => {
@@ -377,11 +382,14 @@ export function createTemporalAAMaterial(uniforms, textures) {
           // Fast motion: whatever a lock keeps is visibly out of date, and the motion blur hides the steps anyway.
           const speedFade = select(lockMaxSpeed.greaterThan(0.0),
             float(1.0).sub(smoothstep(lockMaxSpeed.mul(0.5), lockMaxSpeed, motion)), 1.0);
-          const lockWeight = lock.mul(lockStrength).mul(match).mul(speedFade);
+          // Reused inside the clipHistory branch and again by debug view 1; materialize at this common scope.
+          const lockWeight = lock.mul(lockStrength).mul(match).mul(speedFade).toVar('taaLockWeight');
 
           // The background has no depth to validate against: only matched surfaces get the relaxed clamp.
-          const trusted = depthRejection.and(currentDepth.greaterThan(0.0)).and(match.greaterThan(0.0));
-          const gamma = select(trusted, mix(trustedGamma, varianceGamma, reactiveAmount), varianceGamma);
+          const trusted = depthRejection.and(currentDepth.greaterThan(0.0)).and(match.greaterThan(0.0))
+            .toVar('taaTrusted');
+          const gamma = select(trusted, mix(trustedGamma, varianceGamma, reactiveAmount), varianceGamma)
+            .toVar('taaGamma');
 
           const n = float(neighbourCount);
           const mean = m1.div(n);
@@ -403,8 +411,9 @@ export function createTemporalAAMaterial(uniforms, textures) {
             });
           });
 
-          const rawHistory = RGBToYCoCg(encode(sampleHistory(historyUv)));
-          const resolvedHistory = rawHistory.toVar();
+          // Sampled once at this common scope; read again inside the clipHistory branch and debug views.
+          const rawHistory = RGBToYCoCg(encode(sampleHistory(historyUv))).toVar('taaRawHistory');
+          const resolvedHistory = rawHistory.toVar('taaResolvedHistory');
 
           If(clipHistory, () => {
             If(clipTowardsCurrent, () => {
