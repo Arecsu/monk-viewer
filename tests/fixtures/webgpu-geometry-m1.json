@@ -1,0 +1,452 @@
+{
+  "scope": "opaque forward geometry, encoded color + velocity MRT, 4x MSAA and retained depth; no glass or postprocessing",
+  "validation": {
+    "resolution": [
+      900,
+      600
+    ],
+    "motion": "rigid rotation plus independently translated clips",
+    "interiorPixels": 94012,
+    "continuousSurfacePixels": 93823,
+    "colorAll": {
+      "comparedChannels": 1620000,
+      "differentChannels": 9710,
+      "nonFinite": 0,
+      "maxAbs": 0.203125,
+      "meanAbs": 9.27626821729872e-06,
+      "rmse": 0.0004704223342658014
+    },
+    "colorInterior": {
+      "comparedChannels": 282036,
+      "differentChannels": 8829,
+      "nonFinite": 0,
+      "maxAbs": 0.0546875,
+      "meanAbs": 3.561985541905555e-05,
+      "rmse": 0.0004962097407447873
+    },
+    "velocityInterior": {
+      "comparedChannels": 282036,
+      "differentChannels": 16415,
+      "nonFinite": 0,
+      "maxAbs": 0.0007543563842773438,
+      "meanAbs": 1.9647156413326542e-08,
+      "rmse": 2.84159666915815e-06
+    },
+    "depthInterior": {
+      "comparedChannels": 94012,
+      "differentChannels": 6895,
+      "nonFinite": 0,
+      "maxAbs": 0.00012218952178955078,
+      "meanAbs": 8.289060181609338e-09,
+      "rmse": 6.798983874278228e-07
+    },
+    "velocityContinuous": {
+      "comparedChannels": 281469,
+      "differentChannels": 16335,
+      "nonFinite": 0,
+      "maxAbs": 1.9073486328125e-06,
+      "meanAbs": 8.147994688660937e-09,
+      "rmse": 6.685962868356385e-08
+    },
+    "depthContinuous": {
+      "comparedChannels": 93823,
+      "differentChannels": 6824,
+      "nonFinite": 0,
+      "maxAbs": 5.960464477539063e-08,
+      "meanAbs": 4.3352066758392464e-09,
+      "rmse": 1.607477694841519e-08
+    },
+    "note": "Color is reported, not declared pixel-identical. WebGPU node BRDF and WebGL GLSL BRDF can differ. Depth compares sample 0 against the WebGL implementation-defined resolve; silhouette/depth-discontinuity errors are reported separately, not claimed equivalent.",
+    "discardColor": {
+      "color": {
+        "comparedChannels": 1620000,
+        "differentChannels": 0,
+        "nonFinite": 0,
+        "maxAbs": 0,
+        "meanAbs": 0,
+        "rmse": 0
+      },
+      "velocity": {
+        "comparedChannels": 1620000,
+        "differentChannels": 0,
+        "nonFinite": 0,
+        "maxAbs": 0,
+        "meanAbs": 0,
+        "rmse": 0
+      },
+      "depth": {
+        "comparedChannels": 1620000,
+        "differentChannels": 0,
+        "nonFinite": 0,
+        "maxAbs": 0,
+        "meanAbs": 0,
+        "rmse": 0
+      }
+    },
+    "depthAttachmentExport": {
+      "comparedChannels": 540000,
+      "differentChannels": 0,
+      "nonFinite": 0,
+      "maxAbs": 0,
+      "meanAbs": 0,
+      "rmse": 0
+    }
+  },
+  "runs": [
+    {
+      "resolution": [
+        900,
+        600
+      ],
+      "parameters": {
+        "samples": 24,
+        "rounds": 3,
+        "poses": "one full rotation per round from initial model rotation",
+        "gpuDrainPerSample": true,
+        "postprocessingEnabledDuringTiming": false
+      },
+      "formats": {
+        "gl": [
+          {
+            "type": 1016,
+            "format": 1022,
+            "internal": "R11F_G11F_B10F"
+          },
+          {
+            "type": 1016,
+            "format": 1023,
+            "internal": null
+          }
+        ],
+        "gpu": [
+          "rg11b10ufloat",
+          "rgba16float"
+        ],
+        "actualMsaaSamples": [
+          4,
+          4
+        ],
+        "actualDepthSamples": 4
+      },
+      "draws": {
+        "gl": {
+          "calls": 5,
+          "triangles": 16778
+        },
+        "gpu": {
+          "calls": 5,
+          "triangles": 16778
+        }
+      },
+      "measurements": [
+        {
+          "variant": "webgl",
+          "gpu": {
+            "samples": 72,
+            "medianMs": 1.784499,
+            "p10Ms": 1.540916,
+            "p90Ms": 1.980166,
+            "meanMs": 1.8000307638888888
+          },
+          "cpuSubmission": {
+            "samples": 72,
+            "medianMs": 0.19999998807907104,
+            "p10Ms": 0,
+            "p90Ms": 0.5,
+            "meanMs": 0.2416666667494509
+          },
+          "roundMedians": [
+            1.802791,
+            1.806375,
+            1.775874
+          ]
+        },
+        {
+          "variant": "webgpu-store-msaa-color",
+          "gpu": {
+            "samples": 72,
+            "medianMs": 0.65536,
+            "p10Ms": 0.589824,
+            "p90Ms": 0.65536,
+            "meanMs": 0.6544497777777785
+          },
+          "cpuSubmission": {
+            "samples": 72,
+            "medianMs": 0.20000001788139343,
+            "p10Ms": 0.09999999403953552,
+            "p90Ms": 0.5,
+            "meanMs": 0.2513888892200258
+          },
+          "roundMedians": [
+            0.65536,
+            0.65536,
+            0.65536
+          ]
+        },
+        {
+          "variant": "webgpu-discard-msaa-color",
+          "gpu": {
+            "samples": 72,
+            "medianMs": 0.32768,
+            "p10Ms": 0.262144,
+            "p90Ms": 0.393216,
+            "meanMs": 0.32130844444444445
+          },
+          "cpuSubmission": {
+            "samples": 72,
+            "medianMs": 0.10000002384185791,
+            "p10Ms": 0.09999999403953552,
+            "p90Ms": 0.4000000059604645,
+            "meanMs": 0.180555559694767
+          },
+          "roundMedians": [
+            0.32768,
+            0.32768,
+            0.32768
+          ]
+        },
+        {
+          "variant": "webgpu-discard-color+depth-export",
+          "gpu": {
+            "samples": 72,
+            "medianMs": 0.65536,
+            "p10Ms": 0.393216,
+            "p90Ms": 0.786432,
+            "meanMs": 0.6162204444444446
+          },
+          "cpuSubmission": {
+            "samples": 72,
+            "medianMs": 0.20000001788139343,
+            "p10Ms": 0.10000002384185791,
+            "p90Ms": 0.30000001192092896,
+            "meanMs": 0.2361111111111111
+          },
+          "roundMedians": [
+            0.65536,
+            0.65536,
+            0.65536
+          ]
+        },
+        {
+          "variant": "webgpu-discard-color+depth-attachment",
+          "gpu": {
+            "samples": 72,
+            "medianMs": 0.65536,
+            "p10Ms": 0.458752,
+            "p90Ms": 0.786432,
+            "meanMs": 0.6835768888888893
+          },
+          "cpuSubmission": {
+            "samples": 72,
+            "medianMs": 0.20000001788139343,
+            "p10Ms": 0.19999998807907104,
+            "p90Ms": 0.30000001192092896,
+            "meanMs": 0.2361111127667957
+          },
+          "roundMedians": [
+            0.65536,
+            0.65536,
+            0.65536
+          ]
+        }
+      ]
+    },
+    {
+      "resolution": [
+        3360,
+        1866
+      ],
+      "parameters": {
+        "samples": 24,
+        "rounds": 3,
+        "poses": "one full rotation per round from initial model rotation",
+        "gpuDrainPerSample": true,
+        "postprocessingEnabledDuringTiming": false
+      },
+      "formats": {
+        "gl": [
+          {
+            "type": 1016,
+            "format": 1022,
+            "internal": "R11F_G11F_B10F"
+          },
+          {
+            "type": 1016,
+            "format": 1023,
+            "internal": null
+          }
+        ],
+        "gpu": [
+          "rg11b10ufloat",
+          "rgba16float"
+        ],
+        "actualMsaaSamples": [
+          4,
+          4
+        ],
+        "actualDepthSamples": 4
+      },
+      "draws": {
+        "gl": {
+          "calls": 5,
+          "triangles": 16778
+        },
+        "gpu": {
+          "calls": 5,
+          "triangles": 16778
+        }
+      },
+      "measurements": [
+        {
+          "variant": "webgl",
+          "gpu": {
+            "samples": 72,
+            "medianMs": 13.668125,
+            "p10Ms": 13.165375,
+            "p90Ms": 15.248749,
+            "meanMs": 13.962415569444447
+          },
+          "cpuSubmission": {
+            "samples": 72,
+            "medianMs": 0.4000000059604645,
+            "p10Ms": 0.19999998807907104,
+            "p90Ms": 0.7000000178813934,
+            "meanMs": 0.46388888814383084
+          },
+          "roundMedians": [
+            13.901791,
+            13.655124,
+            13.576499
+          ]
+        },
+        {
+          "variant": "webgpu-store-msaa-color",
+          "gpu": {
+            "samples": 72,
+            "medianMs": 2.031616,
+            "p10Ms": 1.835008,
+            "p90Ms": 3.473408,
+            "meanMs": 2.3811413333333338
+          },
+          "cpuSubmission": {
+            "samples": 72,
+            "medianMs": 0.19999998807907104,
+            "p10Ms": 0.09999999403953552,
+            "p90Ms": 0.5,
+            "meanMs": 0.2444444414642122
+          },
+          "roundMedians": [
+            1.96608,
+            3.342336,
+            1.96608
+          ]
+        },
+        {
+          "variant": "webgpu-discard-msaa-color",
+          "gpu": {
+            "samples": 72,
+            "medianMs": 0.917504,
+            "p10Ms": 0.589824,
+            "p90Ms": 2.29376,
+            "meanMs": 1.233351111111111
+          },
+          "cpuSubmission": {
+            "samples": 72,
+            "medianMs": 0.19999998807907104,
+            "p10Ms": 0.09999999403953552,
+            "p90Ms": 0.5,
+            "meanMs": 0.22499999817874697
+          },
+          "roundMedians": [
+            0.851968,
+            2.097152,
+            0.786432
+          ]
+        },
+        {
+          "variant": "webgpu-discard-color+depth-export",
+          "gpu": {
+            "samples": 72,
+            "medianMs": 2.686976,
+            "p10Ms": 1.900544,
+            "p90Ms": 3.93216,
+            "meanMs": 2.7943822222222225
+          },
+          "cpuSubmission": {
+            "samples": 72,
+            "medianMs": 0.20000001788139343,
+            "p10Ms": 0.09999999403953552,
+            "p90Ms": 0.30000001192092896,
+            "meanMs": 0.22222222263614336
+          },
+          "roundMedians": [
+            2.7525120000000003,
+            3.2767999999999997,
+            2.359296
+          ]
+        },
+        {
+          "variant": "webgpu-discard-color+depth-attachment",
+          "gpu": {
+            "samples": 72,
+            "medianMs": 2.883584,
+            "p10Ms": 2.097152,
+            "p90Ms": 5.373952,
+            "meanMs": 3.3769244444444437
+          },
+          "cpuSubmission": {
+            "samples": 72,
+            "medianMs": 0.19999998807907104,
+            "p10Ms": 0.09999999403953552,
+            "p90Ms": 0.4000000059604645,
+            "meanMs": 0.23194444262319142
+          },
+          "roundMedians": [
+            2.818048,
+            2.424832,
+            5.046272
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "webgpu": {
+    "backend": "WebGPUBackend",
+    "features": [
+      "depth32float-stencil8",
+      "rg11b10ufloat-renderable",
+      "bgra8unorm-storage",
+      "texture-formats-tier1",
+      "texture-compression-bc",
+      "dual-source-blending",
+      "core-features-and-limits",
+      "float32-filterable",
+      "indirect-first-instance",
+      "texture-compression-astc-sliced-3d",
+      "float32-blendable",
+      "texture-compression-astc",
+      "texture-compression-etc2",
+      "depth-clip-control",
+      "texture-compression-bc-sliced-3d",
+      "shader-f16",
+      "timestamp-query",
+      "clip-distances",
+      "texture-formats-tier2",
+      "subgroups"
+    ],
+    "samples": 4,
+    "width": 900,
+    "height": 600,
+    "colorFormat": "rg11b10ufloat",
+    "velocityFormat": "rgba16float",
+    "depthFormat": "depth32float",
+    "specularAA": true,
+    "encodeExposure": 1.6
+  },
+  "adapter": {
+    "vendor": "apple",
+    "architecture": "metal-3",
+    "description": ""
+  }
+}

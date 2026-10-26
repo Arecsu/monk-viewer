@@ -75,7 +75,7 @@ const gt7 = await import('/monk-viewer/tests/gt7-browser.js');
 console.table(await gt7.validateGT7(window.mgr, window.THREE));
 ```
 
-WebGPU is not a renderer toggle for this codebase: the custom GLSL passes and `onBeforeCompile` material patches, the current post-processing pipeline and gain-map decoding would need migration. Three.js's WebGL fallback does not make those existing shaders compatible with `WebGPURenderer`; see the [migration guide](https://threejs.org/manual/en/webgpurenderer.html).
+WebGPU is not a renderer toggle for this codebase: the custom GLSL passes and `onBeforeCompile` material patches, the current post-processing pipeline and gain-map decoding would need migration. Three.js's WebGL fallback does not make those existing shaders compatible with `WebGPURenderer`; see the [migration guide](https://threejs.org/manual/en/webgpurenderer.html). A dev-only [geometry-stage WebGPU experiment](docs/webgpu-geometry-probe.md) compares matching 4× MSAA color/velocity/depth targets, records output differences and GPU timings, and leaves the production renderer unchanged.
 
 ## Using it
 
