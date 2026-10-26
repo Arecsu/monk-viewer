@@ -54,6 +54,8 @@ Deliberate, documented and required by WebGPU:
    that both the glass pass and TAA read. Silhouette depth behaviour is therefore our own policy, not the driver's.
 4. **Luma dithering has a defined zero-luma branch** instead of dividing 0/0; non-zero luma is unchanged.
 5. Samples are logical 4 or 0 (the backend renders 1× or 4×); the auto-tuner's `samples > 0` test still terminates.
+6. The transparency stage cannot be disabled on its own: unlike WebGL there is no implicit depth resolve to fall back
+   on, so `WebGpuTransparency.render()` throws instead of handing TAA an unsampleable multisampled depth.
 
 Everything else — effects, bloom reach, MSAA, temporal filtering, materials, presets, controls, lifecycle, deploy
 prefixes — is preserved.

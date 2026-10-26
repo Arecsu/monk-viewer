@@ -469,7 +469,11 @@ export class WebGpuTransparency {
 
 		if ( this.enabled === false ) {
 
-			return { color, depth, reactiveMask: null, target };
+			// Passing the retained multisampled depth through would hand TAA a `texture_depth_multisampled_2d` that it
+			// samples with a filtered lookup, which is invalid WGSL, and the colour would still be encoded. There is no
+			// reference-equivalent "off" state for this stage in the native pipeline (the WebGL reference skips its
+			// resolve pass entirely and therefore also skips glass), so fail loudly instead of degrading.
+			throw new Error( 'WebGpuTransparency: disabling the resolve stage is not supported natively; disable MSAA on the geometry stage instead' );
 
 		}
 
