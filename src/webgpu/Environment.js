@@ -9,7 +9,6 @@ import {
     XMPMetadataNotFoundError,
     createTextures,
     extractGainmapFromJPEG,
-    processImages,
 } from '@monogrid/gainmap-js/webgpu';
 
 /**
@@ -31,9 +30,8 @@ export const SDR_ONLY_GAIN_MAP_METADATA = Object.freeze({
 const MODEL_TEXTURE_SLOTS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap'];
 
 /**
- * LIFO ownership ledger for one environment load. `dispose()` runs once; a resource that a
- * late completion adds afterwards is released immediately instead of leaking, which is what
- * keeps an aborted load safe.
+ * LIFO ownership ledger. `dispose()` runs once; a resource that a late completion adds afterwards
+ * is released immediately instead of leaking, which is what keeps an aborted load safe.
  */
 export class EnvironmentResources {
     #disposers = [];
@@ -92,21 +90,75 @@ export function gainMapDecoderParameters(metadata, sdr, gainMap) {
     };
 }
 
+/**
+ * Decodes the SDR and gain-map JPEGs with `createImageBitmap`. The native path has no HTML image
+ * fallback, so this stays worker safe. `'from-image'` keeps the JPEG's own orientation, and the
+ * textures below disable `flipY`, which is what the reference WebGPU decode renders from.
+ *
+ * Both decodes are awaited before a failure is reported, so a sibling bitmap is closed instead of
+ * leaked when only one of the two images cannot be decoded.
+ */
+export async function createSourceImages(sdrBuffer, gainMapBuffer, createBitmap = globalThis.createImageBitmap) {
+    if (typeof createBitmap !== 'function') {
+        throw new Error('Gain map environment decoding needs createImageBitmap; the native path has no HTML image fallback');
+    }
+    const options = { imageOrientation: 'from-image' };
+    const decodes = await Promise.allSettled([
+        createBitmap(new Blob([sdrBuffer], { type: 'image/jpeg' }), options),
+        gainMapBuffer === undefined
+            ? Promise.resolve(undefined)
+            : createBitmap(new Blob([gainMapBuffer], { type: 'image/jpeg' }), options),
+    ]);
+    const images = decodes.map((decode) => decode.status === 'fulfilled' ? decode.value : undefined);
+    const failed = decodes.find((decode) => decode.status === 'rejected');
+    if (failed !== undefined) {
+        for (const image of images) image?.close();
+        throw failed.reason;
+    }
+    return { sdrImage: images[0], gainMapImage: images[1] };
+}
+
+/**
+ * Races a promise that cannot be cancelled against `signal`. The abort listener is always removed
+ * and a late settlement is ignored, so a JPEG whose gain-map metadata carries no second image —
+ * the ISO/MPF extractor then never settles — cannot hold up a cancelled initialization.
+ */
+export function abortable(promise, signal) {
+    if (signal === undefined) return promise;
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+        const onAbort = () => reject(signal.reason ?? new DOMException('The operation was aborted.', 'AbortError'));
+        const settle = (callback) => (value) => {
+            signal.removeEventListener('abort', onAbort);
+            callback(value);
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        promise.then(settle(resolve), settle(reject));
+    });
+}
+
 /** Decodes the gain-map source into a half-float equirectangular render target. */
-async function decodeGainMapSource(renderer, source, resources) {
+async function decodeGainMapSource(renderer, source, scratch) {
     if (renderer.hasInitialized() === false) await renderer.init();
 
-    // 'from-image' keeps the JPEG's own orientation. The WebGPU render target stores top row
-    // first, and the quad's uv places v=1 at the top of the viewport, so the decoded equirect
-    // ends up with v=0 at the bottom of the image like the reference GPU-rendered texture.
-    const { sdrImage, gainMapImage, needsFlip } = await processImages(source.sdr.buffer, source.gainMap?.buffer, 'from-image');
-    const { sdr, gainMap } = createTextures(sdrImage, gainMapImage, needsFlip);
-    resources.add(() => {
+    const { sdrImage, gainMapImage } = await createSourceImages(source.sdr, source.gainMap);
+    // Registered before the textures exist, so a later constructor failure cannot leak the bitmaps:
+    // Texture.dispose() releases GPU memory only, never the CPU image data.
+    scratch.add(() => {
+        sdrImage.close();
+        gainMapImage?.close();
+    });
+
+    // `false` = no texture flip; the bitmaps were decoded with 'from-image' above.
+    const { sdr, gainMap } = createTextures(sdrImage, gainMapImage, false);
+    scratch.add(() => {
         sdr.dispose();
         gainMap.dispose();
     });
 
     const material = new GainMapDecoderMaterial(gainMapDecoderParameters(source.metadata, sdr, gainMap));
+    scratch.add(() => material.dispose());
+
     const quadRenderer = new QuadRenderer({
         width: sdrImage.width,
         height: sdrImage.height,
@@ -129,18 +181,22 @@ async function decodeGainMapSource(renderer, source, resources) {
     });
     // QuadRenderer owns the render target, the decode material and the quad geometry; the SDR and
     // gain map source textures live inside its TSL nodes and are disposed above.
-    resources.add(() => quadRenderer.dispose(true));
+    scratch.add(() => quadRenderer.dispose(true));
 
     await quadRenderer.render();
     return quadRenderer.renderTarget.texture;
 }
 
-/** Prefilters the equirectangular HDR environment with the native WebGPU PMREM generator. */
-function prefilterEnvironment(renderer, equirectangular, resources) {
+/**
+ * Prefilters the equirectangular HDR environment with the native WebGPU PMREM generator. The
+ * generator is scratch (it terminates once the PMREM exists); the PMREM target is the only
+ * resource that outlives the load.
+ */
+function prefilterEnvironment(renderer, equirectangular, scratch, environment) {
     const generator = new GPU.PMREMGenerator(renderer);
-    resources.add(() => generator.dispose());
+    scratch.add(() => generator.dispose());
     const target = generator.fromEquirectangular(equirectangular);
-    resources.add(() => target.dispose());
+    environment.add(() => target.dispose());
     return target.texture;
 }
 
@@ -148,22 +204,43 @@ function prefilterEnvironment(renderer, equirectangular, resources) {
  * Loads a gain-map HDR environment for a native WebGPU renderer.
  *
  * Returns the half-float CubeUV PMREM (`scene.environment` consumes it directly) and a `dispose`
- * that releases the PMREM, the PMREM generator and the decode intermediates. `signal` aborts the
- * request; a decode that completes after the abort is disposed instead of retained.
+ * that releases it. The decode render target, its textures, the source bitmaps and the PMREM
+ * generator are released as soon as the device reports the submitted work done, so a loaded
+ * environment retains only the PMREM. `signal` aborts the request; work that completes after an
+ * abort is released instead of returned.
  */
 export async function loadWebGpuEnvironment(renderer, url, { signal } = {}) {
-    const resources = new EnvironmentResources();
+    const scratch = new EnvironmentResources();
+    const environment = new EnvironmentResources();
+    let released = false;
+    // The decode and PMREM passes are only submitted to the queue, so their intermediates must live
+    // until the device reports that work done; disposing them earlier would free textures a live
+    // command buffer still reads.
+    const releaseScratch = async () => {
+        if (released) return;
+        released = true;
+        try {
+            await waitForSubmittedWork(renderer);
+        } catch {
+            // A lost device already dropped that work; the JS-side references still have to go.
+        }
+        scratch.dispose();
+    };
+
     try {
         const jpegBuffer = await loadJPEGBuffer(url, signal);
         signal?.throwIfAborted();
-        const source = await extractGainMapSource(jpegBuffer, url);
+        const source = await abortable(extractGainMapSource(jpegBuffer, url), signal);
         signal?.throwIfAborted();
-        const equirectangular = await decodeGainMapSource(renderer, source, resources);
+        const equirectangular = await decodeGainMapSource(renderer, source, scratch);
         signal?.throwIfAborted();
-        const texture = prefilterEnvironment(renderer, equirectangular, resources);
-        return { texture, dispose: () => resources.dispose() };
+        const texture = prefilterEnvironment(renderer, equirectangular, scratch, environment);
+        await releaseScratch();
+        signal?.throwIfAborted();
+        return { texture, dispose: () => environment.dispose() };
     } catch (error) {
-        resources.dispose();
+        await releaseScratch();
+        environment.dispose();
         if (error?.name === 'AbortError') throw error;
         throw new Error(`Failed to load HDR environment: ${error}`, { cause: error });
     }
@@ -180,6 +257,13 @@ async function loadJPEGBuffer(url, signal) {
     } finally {
         signal?.removeEventListener('abort', abort);
     }
+}
+
+/** Resolves when the WebGPU queue finished everything submitted so far. */
+async function waitForSubmittedWork(renderer) {
+    const queue = renderer.backend?.device?.queue;
+    if (queue?.onSubmittedWorkDone === undefined) return;
+    await queue.onSubmittedWorkDone();
 }
 
 /**
