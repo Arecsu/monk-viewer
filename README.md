@@ -75,7 +75,7 @@ const gt7 = await import('/monk-viewer/tests/gt7-browser.js');
 console.table(await gt7.validateGT7(window.mgr, window.THREE));
 ```
 
-WebGPU is not a renderer toggle for this codebase: the custom GLSL passes and `onBeforeCompile` material patches, the current post-processing pipeline and gain-map decoding would need migration. Three.js's WebGL fallback does not make those existing shaders compatible with `WebGPURenderer`; see the [migration guide](https://threejs.org/manual/en/webgpurenderer.html). A dev-only [geometry-stage WebGPU experiment](docs/webgpu-geometry-probe.md) compares matching 4× MSAA color/velocity/depth targets, records output differences and GPU timings, and leaves the production renderer unchanged.
+A native WebGPU backend now exists (Three.js node materials and TSL, no WebGL anywhere in it): encoded 4× MSAA geometry with per-mesh velocity, explicit sample-0 depth for glass and TAA, the full temporal/bloom/GT7/dither/SMAA chain, and native gain-map environment loading. It is selected explicitly with `backend="webgpu"` on `<monk-view>` (or `?backend=webgpu` in the lab); `auto` keeps the WebGL reference until the acceptance gate is flipped, and `webgl` forces the reference. See [docs/webgpu-native.md](docs/webgpu-native.md) for the architecture, backend selection and limitations, and [docs/webgpu-parity.md](docs/webgpu-parity.md) for the measured WebGL-vs-native parity and whole-pipeline throughput. The earlier [geometry-stage experiment](docs/webgpu-geometry-probe.md) remains as the isolated-stage evidence it is.
 
 ## Using it
 
