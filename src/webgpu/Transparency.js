@@ -264,10 +264,13 @@ export class WebGpuTransparency {
 		} );
 		this.exportMaterial.fragmentNode = T.vec4( 0.0 );
 
+		// Decode and depth export share one full-resolution pass: the quad writes the decoded colour and, at the same
+		// time, depth sample 0 of the retained multisampled depth into the glass target's single-sample depth
+		// attachment. depthTest stays off so the write cannot be rejected by the cleared depth buffer.
 		this.decodeMaterial = new GPU.MeshBasicNodeMaterial( {
 			name: 'TransparencyDecodeMaterial',
 			depthTest: false,
-			depthWrite: false,
+			depthWrite: true,
 			fog: false
 		} );
 
@@ -494,7 +497,6 @@ export class WebGpuTransparency {
 
 			this.syncSources( color, depth );
 
-			this.exportDepth( renderer );
 			this.decode( renderer );
 			this.drawGlass( renderer );
 
@@ -562,9 +564,7 @@ export class WebGpuTransparency {
 		this.sourceColor = color;
 		this.sourceDepth = depth;
 
-		this.exportMaterial.depthNode = loadRetainedDepthSample( depth );
-		this.exportMaterial.needsUpdate = true;
-
+		this.decodeMaterial.depthNode = loadRetainedDepthSample( depth );
 		this.decodeMaterial.fragmentNode = createDecodeNode( color, this.exposureNode, this.encodingNode );
 		this.decodeMaterial.needsUpdate = true;
 
@@ -576,10 +576,17 @@ export class WebGpuTransparency {
 	 * @param {GPU.WebGPURenderer} renderer - The native renderer.
 	 */
 
+	/** Writes only the exported depth (decode disabled); kept for tests and diagnostics, not used per frame. */
 	exportDepth( renderer ) {
 
-		renderer.setRenderTarget( this.glassTarget );
-		this.exportQuad.render( renderer );
+		const colorWrite = this.decodeMaterial.colorWrite;
+		this.decodeMaterial.colorWrite = false;
+		try {
+			renderer.setRenderTarget( this.glassTarget );
+			this.decodeQuad.render( renderer );
+		} finally {
+			this.decodeMaterial.colorWrite = colorWrite;
+		}
 
 	}
 

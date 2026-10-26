@@ -72,6 +72,8 @@ class BloomControls {
 		this.luminanceEnabled = luminanceEnabled;
 		this.clampToBorder = clampToBorder;
 		this.fullResolutionUpsampling = fullResolutionUpsampling;
+		// aa-lab's "bloom bounds" toggle. false forces full-screen bloom, like BoundedBloomEffect.backgroundFastPath.
+		this.backgroundFastPath = true;
 		this.activeLevels = levels;
 		this.scale = 1;
 		this.luminanceWidth = 1;
@@ -450,6 +452,10 @@ export class WebGpuPostColor {
 
 	_updateBounds(bounds) {
 
+		if(this.bloom.backgroundFastPath === false) {
+			this.uBloomBounds.value.set(0, 0, 1, 1);
+			return;
+		}
 		const b = vector4Of(bounds);
 		if(b === null || !b.every(finite) || b[2] <= b[0] || b[3] <= b[1]) {
 			this.uBloomBounds.value.set(0, 0, 1, 1);
@@ -535,7 +541,7 @@ export class WebGpuPostColor {
 
 	}
 
-	render({ color, bounds, depth, camera } = {}) {
+	render({ color, bounds, depth, camera, present = false } = {}) {
 
 		if(this.disposed) throw new Error('WebGpuPostColor is disposed');
 		const source = textureOf(color);
@@ -556,10 +562,21 @@ export class WebGpuPostColor {
 		this.uQuantize.value = smaaActive ? 1 : 0;
 		this._toneSource.value = source;
 		this._toneBloom.value = bloomTexture;
+
+		// Without SMAA the tone-mapping pass can write straight to the canvas: one less full-resolution pass and one
+		// less full-resolution texture, and the renderer's output transform remains the single sRGB boundary.
+		if(present && !smaaActive) {
+			this._tonePass.render(null);
+			return { color: null, target: null, presented: true };
+		}
+
 		const target = smaaActive ? this.displayTarget : this.outputTarget;
 		this._tonePass.render(target);
 
-		if(smaaActive) this.smaaPass.render(this.displayTarget.texture, this.outputTarget, { depth, camera });
+		if(smaaActive) {
+			this.smaaPass.render(this.displayTarget.texture, this.outputTarget, { depth, camera });
+			if(present) return { color: this.outputTarget.texture, target: this.outputTarget, presentAfter: true };
+		}
 		return { color: this.outputTarget.texture, target: this.outputTarget };
 
 	}

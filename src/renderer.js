@@ -183,7 +183,7 @@ class ThreeSceneManager {
 				this.handleResize(true)
 				// Compile/upload on a staging canvas before binding the user's canvas.
 				this.renderer.backend.device.pushErrorScope('validation')
-				this.pipeline.render({ present: false })
+				this.pipeline.render({ present: true })
 				const validationError = await this.renderer.backend.device.popErrorScope()
 				await this.renderer.backend.device.queue.onSubmittedWorkDone()
 				if (validationError) throw new Error(`WebGPU validation: ${validationError.message}`)
@@ -196,7 +196,8 @@ class ThreeSceneManager {
 				this.pipeline.resetHistory()
 			}
 			this.isReady = true
-			this.reportBackend({ phase: 'ready' })
+			const smaaError = this.pipeline?.postColor?.smaaPass?.error
+			this.reportBackend({ phase: 'ready', ...(smaaError ? { degraded: [smaaError] } : {}) })
 			this.e_ready(true)
 			if (this.disposed) return this
 			if (this.shouldStart && !this.hasStarted) {
@@ -216,7 +217,7 @@ class ThreeSceneManager {
 		if (this.disposed || this.hasAborted) return
 		this.hasAborted = true
 		this.pauseRendering()
-		this.pipeline?.reset?.()
+		this.pipeline?.resetHistory?.()
 		this.reportBackend({ phase, reason: String(error?.message ?? error) })
 		this.e_error({ message: String(error?.message ?? error), backend: this.backendStatus.selected,
 			needsCanvasReplacement: this.canvasBound, recoverable: this.backendStatus.selected === 'webgpu' })

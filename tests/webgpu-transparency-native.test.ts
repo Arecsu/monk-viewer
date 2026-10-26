@@ -169,7 +169,8 @@ test("exports sample 0 into a real single-sample depth32float attachment", () =>
     assert.equal(transparency.height, 4);
 
     // The wired export material reads sample 0 of the depth handed in by the geometry pass
-    const depthNode = (transparency as any).exportMaterial.depthNode;
+    // Decode and depth export are one pass (fused): the decode material owns the sample-0 depth write.
+    const depthNode = (transparency as any).decodeMaterial.depthNode;
     assert.equal(depthNode.value, geometry.depth);
     assert.equal(depthNode.levelNode.value, DEPTH_SAMPLE_INDEX);
     assert.equal(typeof renderer.render, "function");
@@ -185,17 +186,17 @@ test("renders export, decode, glass and a depth tested reactive mask, then resto
     const result = transparency.render(geometry as any);
 
     const renders = calls.filter((call) => call.type === "render");
-    assert.equal(renders.length, 4, "export, decode, glass and mask");
-    // 1 + 2: the fullscreen depth export and the fullscreen decode, both into the HDR target
-    for(const pass of renders.slice(0, 2)) {
-        assert.equal(pass.scene.isQuadMesh, true);
-        assert.equal(pass.target, result.target);
-        assert.equal(pass.autoClear, false, "the decode must not clear the exported depth");
-    }
-    assert.equal(renders[0].scene.material, transparency.exportMaterial);
-    assert.equal(renders[1].scene.material, transparency.decodeMaterial);
-    // 3: the glass, drawn with the authored materials against the exported depth
-    const glassPass = renders[2];
+    assert.equal(renders.length, 3, "fused decode+depth export, glass and mask");
+    // 1: decode writes the HDR colour AND depth sample 0 into the single-sample depth attachment
+    const decodePass = renders[0];
+    assert.equal(decodePass.scene.isQuadMesh, true);
+    assert.equal(decodePass.target, result.target);
+    assert.equal(decodePass.autoClear, false, "the decode must not clear the exported depth");
+    assert.equal(decodePass.scene.material, transparency.decodeMaterial);
+    assert.equal(transparency.decodeMaterial.depthWrite, true, "the fused pass writes the exported depth");
+    assert.equal(transparency.decodeMaterial.depthTest, false, "depth testing against the cleared depth would reject it");
+    // 2: the glass, drawn with the authored materials against the exported depth
+    const glassPass = renders[1];
     assert.equal(glassPass.scene.isScene, true);
     assert.equal(glassPass.target, result.target);
     assert.equal(glassPass.autoClear, false);
@@ -204,7 +205,7 @@ test("renders export, decode, glass and a depth tested reactive mask, then resto
     assert.equal(glassPass.layers, 1 << 1, "only the transparent layer is drawn");
     // 4: the reactive mask, colour only cleared so the shared exported depth survives, depth tested against it
     const maskTarget = (result.reactiveMask as any).renderTarget;
-    const maskPass = renders[3];
+    const maskPass = renders[2];
     assert.equal(maskTarget, transparency.reactiveMaskTarget);
     assert.equal(maskTarget.depthTexture, result.depth, "the mask is depth tested against the exported depth");
     assert.equal(maskTarget.samples, 0);
@@ -213,7 +214,7 @@ test("renders export, decode, glass and a depth tested reactive mask, then resto
     const clears = calls.filter((call) => call.type === "clear");
     assert.equal(clears.length, 1);
     assert.deepEqual([clears[0].color, clears[0].depth, clears[0].stencil], [true, false, false]);
-    assert.ok(calls.indexOf(clears[0]) < calls.indexOf(renders[3]));
+    assert.ok(calls.indexOf(clears[0]) < calls.indexOf(renders[2]));
 
     // No hidden opaque write: the glass keeps its transparent, non depth writing, double sided state
     assert.equal(glass.material, glassState.material);
@@ -269,7 +270,7 @@ test("disabled reactive mask renders no mask and returns no mask texture", () =>
     const geometry = createGeometry(8, 4);
     const result = transparency.render(geometry as any);
     assert.equal(result.reactiveMask, null);
-    assert.equal(calls.filter((call) => call.type === "render").length, 3);
+    assert.equal(calls.filter((call) => call.type === "render").length, 2, "fused decode+depth export, then glass");
     assert.equal(calls.filter((call) => call.type === "clear").length, 0);
 });
 

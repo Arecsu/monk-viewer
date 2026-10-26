@@ -47,6 +47,8 @@ export async function createReferenceManager({ width = 900, height = 600, pixelR
 export async function compare({ cases, resolution = [900, 600], pixelRatio = 1, tolerance, benchmark = false, samples = 8, rounds = 2, signal } = {}) {
   const capture = captureConsole();
   const native = window.mgr;
+  // Reading the presented image needs it as a texture; the viewer itself renders the tone pass straight to the canvas.
+  if (native?.pipeline) native.pipeline.captureFinal = true;
   if (!native) throw new Error('No native manager on window.mgr (open the lab with ?backend=webgpu)');
   native.pauseRendering();
   let reference;

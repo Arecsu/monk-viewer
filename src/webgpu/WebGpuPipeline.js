@@ -37,6 +37,9 @@ export class WebGpuPipeline {
     this.owned = [];
     this.lastSignature = '';
     this.prepared = false;
+    // Validation needs the presented pixels as a texture. The viewer keeps this false so the tone pass writes
+    // straight to the canvas and no extra full-resolution pass or target is allocated.
+    this.captureFinal = false;
 
     const own = (component) => { this.owned.push(component); return component; };
     try {
@@ -89,11 +92,46 @@ export class WebGpuPipeline {
     }
   }
 
-  /** Awaits optional asynchronously loaded components (SMAA lookups) so the first presented frame is final. */
+  /**
+   * Awaits optional asynchronously loaded components (SMAA lookups) so the first presented frame is final, then
+   * proves the optional SMAA modules actually compile on this device. A broken SMAA shader must degrade to
+   * "SMAA off, reported" instead of failing the whole native backend.
+   */
   async compile() {
     const ready = await Promise.race([this.postColor.ready, new Promise((resolve) => setTimeout(() => resolve('timeout'), 15000))]);
     if (ready === 'timeout') console.warn('Native pipeline: SMAA lookup did not load within 15s; rendering without SMAA until it does');
+    await this.validateOptionalStages();
     return this;
+  }
+
+  async validateOptionalStages() {
+    const smaa = this.postColor.smaaPass;
+    if (!smaa || !smaa.enabled) return;
+    const device = this.renderer.backend?.device;
+    const disable = (reason) => {
+      smaa.enabled = false;
+      smaa.error = `native SMAA disabled: ${reason}`;
+      console.warn(`Native pipeline: ${smaa.error}`);
+    };
+    if (!device?.pushErrorScope) return;
+    device.pushErrorScope('validation');
+    let thrown = null;
+    try {
+      // One real draw of both SMAA stages into their own targets compiles edge detection, weights and blend.
+      // A tiny throw-away depth texture satisfies depth predication; this probe only has to compile, not look right.
+      const probeDepth = new GPU.DepthTexture(4, 4, GPU.FloatType);
+      try {
+        smaa.render(this.postColor.displayTarget.texture, this.postColor.outputTarget, { depth: probeDepth, camera: this.manager.camera });
+      } finally {
+        probeDepth.dispose();
+      }
+    } catch (error) {
+      thrown = error;
+    }
+    const scopeError = await device.popErrorScope();
+    await device.queue.onSubmittedWorkDone();
+    if (thrown) disable(thrown.message);
+    else if (scopeError) disable(scopeError.message.split('\n')[0]);
   }
 
   /** Converts the model's materials in place; call after the GLB loads. */
@@ -168,10 +206,13 @@ export class WebGpuPipeline {
       });
       const bounds = this.motionBlur.enabled ? this.motionBlur.backgroundBounds
         : this.taa.enabled ? this.taa.backgroundBounds : null;
-      const final = this.postColor.render({ color: blur.color, bounds, depth: glass.depth, camera: this.camera });
+      const final = this.postColor.render({
+        color: blur.color, bounds, depth: glass.depth, camera: this.camera,
+        present: present && !this.captureFinal,
+      });
       this.latest = { geometry, glass, taa, blur, final };
       this.finalTarget = final.target;
-      if (present) {
+      if (present && !final.presented) {
         this.presentationSource.value = final.color;
         renderer.autoClear = true;
         this.presentation.render(null);

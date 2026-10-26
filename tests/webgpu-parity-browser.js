@@ -144,6 +144,19 @@ function toggle(referenceManager, native, ablation) {
   return restore;
 }
 
+// Mirrors the viewer's own aspect rule (renderer.js handleResize) without touching the page CSS: the camera
+// distance multiplier depends on height/width, so portrait and landscape frame identically on both backends.
+function applyAspect(manager, resolution) {
+  const width = resolution[0], height = resolution[1];
+  manager.updateRendererSize(width, height, 1);
+  const multiplier = manager.cameraMultiplier(height / width) || 1;
+  manager.baseCameraSettings.multiplier = multiplier;
+  manager.camera.position.z = manager.baseCameraSettings.targetDistance * multiplier;
+  manager.camera.aspect = width / height;
+  manager.camera.updateProjectionMatrix();
+  manager.camera.updateMatrixWorld(true);
+}
+
 const waitFrames = (count) => new Promise((resolve) => {
   let remaining = count;
   const tick = () => (--remaining <= 0 ? resolve() : requestAnimationFrame(tick));
@@ -159,9 +172,7 @@ export async function measureParity({ resolution = [900, 600], frames = 48, abla
     reference = await createReferenceManager({ width: resolution[0], height: resolution[1], pixelRatio: 1, envmapUrl: native.envmapUrl });
     const referenceManager = reference.manager;
     for (const manager of [referenceManager, native]) {
-      manager.updateRendererSize(resolution[0], resolution[1], 1);
-      manager.camera.aspect = resolution[0] / resolution[1];
-      manager.camera.updateProjectionMatrix();
+      applyAspect(manager, resolution);
       manager.model.rotation.set(0, 0, 0);
       manager.model.updateMatrixWorld(true);
       manager.taa.reset?.();
@@ -209,20 +220,20 @@ export async function measureParity({ resolution = [900, 600], frames = 48, abla
   }
 }
 
-export async function saveParityImages(name = 'parity') {
+export async function saveParityImages({ resolution = [900, 600], frames = 48 } = {}) {
   const native = window.mgr;
+  // Reading the presented image needs it as a texture; the viewer itself renders the tone pass straight to the canvas.
+  if (native?.pipeline) native.pipeline.captureFinal = true;
   native.pauseRendering();
   let reference;
   try {
-    reference = await createReferenceManager({ width: 900, height: 600, pixelRatio: 1, envmapUrl: native.envmapUrl });
+    reference = await createReferenceManager({ width: resolution[0], height: resolution[1], pixelRatio: 1, envmapUrl: native.envmapUrl });
     const referenceManager = reference.manager;
     for (const manager of [referenceManager, native]) {
-      manager.updateRendererSize(900, 600, 1);
-      manager.camera.aspect = 900 / 600;
-      manager.camera.updateProjectionMatrix();
+      applyAspect(manager, resolution);
       manager.taa.reset?.();
     }
-    for (let frame = 0; frame < 48; ++frame) { referenceManager.pipeline.render(); native.pipeline.render(); }
+    for (let frame = 0; frame < frames; ++frame) { referenceManager.pipeline.render(); native.pipeline.render(); }
     await native.renderer.backend.device.queue.onSubmittedWorkDone();
     const a = readWebGl(referenceManager);
     const b = await readNative(native);
@@ -250,7 +261,7 @@ export async function saveParityImages(name = 'parity') {
     context.putImageData(diff, a.width * 2, 0, 0, 0, a.width, a.height);
     document.getElementById('parity-images')?.remove();
     document.body.appendChild(canvas);
-    return { painted: true, name };
+    return { painted: true, width: a.width, height: a.height };
   } finally {
     reference?.manager.dispose();
     native.resumeRendering();
@@ -260,6 +271,8 @@ export async function saveParityImages(name = 'parity') {
 /** TAA accumulation sweep: compares after N still frames to separate first-frame parity from history drift. */
 export async function sweepTaa({ resolution = [900, 600], checkpoints = [1, 2, 4, 8, 16, 32, 64] } = {}) {
   const native = window.mgr;
+  // Reading the presented image needs it as a texture; the viewer itself renders the tone pass straight to the canvas.
+  if (native?.pipeline) native.pipeline.captureFinal = true;
   native.pauseRendering();
   let reference;
   const rows = [];
@@ -267,9 +280,7 @@ export async function sweepTaa({ resolution = [900, 600], checkpoints = [1, 2, 4
     reference = await createReferenceManager({ width: resolution[0], height: resolution[1], pixelRatio: 1, envmapUrl: native.envmapUrl });
     const referenceManager = reference.manager;
     for (const manager of [referenceManager, native]) {
-      manager.updateRendererSize(resolution[0], resolution[1], 1);
-      manager.camera.aspect = resolution[0] / resolution[1];
-      manager.camera.updateProjectionMatrix();
+      applyAspect(manager, resolution);
       manager.model.rotation.set(0, 0, 0);
       manager.model.updateMatrixWorld(true);
     }
@@ -303,6 +314,8 @@ export async function sweepTaa({ resolution = [900, 600], checkpoints = [1, 2, 4
 /** Reads the native TAA state texture (depth, lock, motion.xy) to check still-frame motion is ~0. */
 export async function inspectTaaState({ samples = 4000 } = {}) {
   const native = window.mgr;
+  // Reading the presented image needs it as a texture; the viewer itself renders the tone pass straight to the canvas.
+  if (native?.pipeline) native.pipeline.captureFinal = true;
   const was = native.pauseRendering();
   try {
     for (let i = 0; i < 4; ++i) native.pipeline.render();
@@ -331,14 +344,14 @@ export async function inspectTaaState({ samples = 4000 } = {}) {
 export async function benchmark({ resolution = [900, 600], pixelRatio = 1, samples = 12, rounds = 3, warmupFrames = 8, sustainedFrames = 30 } = {}) {
   const { benchmarkPipeline } = await import('./webgpu-pipeline-browser.js');
   const native = window.mgr;
+  // Reading the presented image needs it as a texture; the viewer itself renders the tone pass straight to the canvas.
+  if (native?.pipeline) native.pipeline.captureFinal = true;
   native.pauseRendering();
   let reference;
   try {
     reference = await createReferenceManager({ width: resolution[0], height: resolution[1], pixelRatio, envmapUrl: native.envmapUrl });
     for (const manager of [reference.manager, native]) {
-      manager.updateRendererSize(resolution[0], resolution[1], pixelRatio);
-      manager.camera.aspect = resolution[0] / resolution[1];
-      manager.camera.updateProjectionMatrix();
+      applyAspect(manager, resolution);
     }
     const runs = await benchmarkPipeline([reference.manager, native], {
       resolutions: [resolution], pixelRatio, samples, rounds, warmupFrames, sustainedFrames,
@@ -351,6 +364,114 @@ export async function benchmark({ resolution = [900, 600], pixelRatio = 1, sampl
       roundMedians: run.roundMedians?.map((value) => +value.toFixed(3)),
       drawCalls: run.draws?.backends?.map((entry) => `${entry.backend}:${entry.calls}/${entry.triangles}`),
     }));
+  } finally {
+    reference?.manager.dispose();
+    native.resumeRendering();
+  }
+}
+
+const CONDITIONS = {
+  'taa-off': { ref: (r) => { r.taa.enabled = false; }, native: (n) => { n.taa.enabled = false; } },
+  'motion-blur-off': { ref: (r) => { r.motionBlurPass.enabled = false; }, native: (n) => { n.motionBlurPass.enabled = false; } },
+  'reinhard': {
+    ref: (r) => { const e = referenceEffects(r); if (e.gt7) e.gt7.enabled = false; if (e.reinhard) e.reinhard.enabled = true; },
+    native: (n) => { n.pipeline.postColor.gt7ToneMapping.enabled = false; n.pipeline.postColor.reinhardToneMapping.enabled = true; },
+  },
+  'msaa-off': { ref: (r) => { r.geometryPass.samples = 0; }, native: (n) => { n.geometryPass.samples = 0; } },
+  'bloom-off': { ref: (r) => { const e = referenceEffects(r); if (e.bloom) e.bloom.enabled = false; }, native: (n) => { n.pipeline.postColor.bloom.enabled = false; } },
+  'dither-off': { ref: (r) => { const e = referenceEffects(r); if (e.dither) e.dither.enabled = false; }, native: (n) => { n.pipeline.postColor.dithering.enabled = false; } },
+  'taa-only': {
+    ref: (r) => { const e = referenceEffects(r); for (const key of ['bloom', 'dither']) if (e[key]) e[key].enabled = false; r.motionBlurPass.enabled = false; },
+    native: (n) => { n.pipeline.postColor.bloom.enabled = false; n.pipeline.postColor.dithering.enabled = false; n.motionBlurPass.enabled = false; },
+  },
+};
+
+// A single condition in a fresh session: the only reliable way to attribute a difference to one change.
+export async function measureCase({ pose = 'still', resolution = [900, 600], frames = 24, condition = null, clipAmplitude = 0.03 } = {}) {
+  const native = window.mgr;
+  // Reading the presented image needs it as a texture; the viewer itself renders the tone pass straight to the canvas.
+  if (native?.pipeline) native.pipeline.captureFinal = true;
+  native.pauseRendering();
+  // The native manager persists between calls: snapshot every toggle this function can touch and restore it.
+  const snapshot = {
+    taa: native.taa.enabled, blur: native.motionBlurPass.enabled,
+    bloom: native.pipeline.postColor.bloom.enabled, dither: native.pipeline.postColor.dithering.enabled,
+    gt7: native.pipeline.postColor.gt7ToneMapping.enabled, reinhard: native.pipeline.postColor.reinhardToneMapping.enabled,
+    samples: native.geometryPass.samples, rotation: native.model?.rotation.clone(),
+    clips: (() => { const list = []; native.model?.traverse((o) => { if (o.isMesh && o.name.startsWith('CLIP')) list.push({ object: o, x: o.position.x }); }); return list; })(),
+  };
+  const restoreNative = () => {
+    native.taa.enabled = snapshot.taa; native.motionBlurPass.enabled = snapshot.blur;
+    native.pipeline.postColor.bloom.enabled = snapshot.bloom; native.pipeline.postColor.dithering.enabled = snapshot.dither;
+    native.pipeline.postColor.gt7ToneMapping.enabled = snapshot.gt7; native.pipeline.postColor.reinhardToneMapping.enabled = snapshot.reinhard;
+    if (native.geometryPass.samples !== snapshot.samples) native.geometryPass.samples = snapshot.samples;
+    if (native.model && snapshot.rotation) { native.model.rotation.copy(snapshot.rotation); }
+    for (const clip of snapshot.clips) clip.object.position.x = clip.x;
+    native.model?.updateMatrixWorld(true);
+    native.taa.reset?.();
+  };
+  let reference;
+  try {
+    reference = await createReferenceManager({ width: resolution[0], height: resolution[1], pixelRatio: 1, envmapUrl: native.envmapUrl });
+    const referenceManager = reference.manager;
+    for (const manager of [referenceManager, native]) {
+      applyAspect(manager, resolution);
+      manager.model.rotation.set(0, 0, 0);
+      manager.model.updateMatrixWorld(true);
+      manager.taa.reset?.();
+    }
+    if (condition) {
+      if (!CONDITIONS[condition]) throw new Error(`unknown condition ${condition}`);
+      CONDITIONS[condition].ref(referenceManager);
+      CONDITIONS[condition].native(native);
+      referenceManager.taa?.reset?.();
+      native.taa?.reset?.();
+    }
+    const clips = [];
+    for (const manager of [referenceManager, native]) {
+      manager.model.traverse((object) => { if (object.isMesh && object.name.startsWith('CLIP')) clips.push({ manager, object, base: object.position.x }); });
+    }
+    for (let frame = 0; frame < frames; ++frame) {
+      if (pose === 'rotation' || pose === 'orbit' || pose === 'both') {
+        const angle = (frame / frames) * Math.PI * 0.6;
+        for (const manager of [referenceManager, native]) {
+          manager.model.rotation.set(0, angle, 0);
+          manager.model.updateMatrixWorld(true);
+        }
+      }
+      if (pose === 'orbit' || pose === 'both') {
+        for (const manager of [referenceManager, native]) {
+          manager.controls._goalSpherical.theta = (frame / frames) * 0.5;
+        }
+      }
+      if (pose === 'clips') {
+        for (const clip of clips) {
+          clip.object.position.x = clip.base + Math.sin((frame / frames) * Math.PI * 2) * clipAmplitude;
+        }
+        for (const manager of [referenceManager, native]) manager.model.updateMatrixWorld(true);
+      }
+      referenceManager.pipeline.render();
+      native.pipeline.render();
+    }
+    await native.renderer.backend.device.queue.onSubmittedWorkDone();
+    const gl = referenceManager.renderer.getContext();
+    const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    gl.flush();
+    while (gl.clientWaitSync(sync, 0, 0) === gl.TIMEOUT_EXPIRED) await new Promise((r) => setTimeout(r, 4));
+    gl.deleteSync(sync);
+    const comparison = compareCaptures(readWebGl(referenceManager), await readNative(native));
+    const refTime = coverageOf(readWebGl(referenceManager)), nativeTime = coverageOf(await readNative(native));
+    return {
+      pose, condition, resolution, frames, clipCount: clips.length,
+      meanSteps: +(comparison.meanStep * 255).toFixed(2),
+      worstSteps: +(comparison.maxStep * 255).toFixed(1),
+      visiblePct: +(comparison.visiblePixelFraction * 100).toFixed(2),
+      flatOutlierPct: +(comparison.flat.outlierFraction * 100).toFixed(3),
+      flatRmseSteps: +(comparison.flat.rmseStep * 255).toFixed(2),
+      edgeMeanSteps: +(comparison.edge.meanStep * 255).toFixed(2),
+      coverageDeltaPct: +((nativeTime - refTime) * 100).toFixed(2),
+      nonFinite: comparison.nonFinite,
+    };
   } finally {
     reference?.manager.dispose();
     native.resumeRendering();
