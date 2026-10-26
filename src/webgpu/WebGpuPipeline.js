@@ -24,18 +24,21 @@ export class WebGpuPipeline {
     this.frame = 0;
     this.latest = null;
     this.finalTarget = null;
+    this.owned = [];
+    const own = pass => { this.owned.push(pass); return pass; };
+    try {
     const { scene, camera, msaaSamples: samples, grazingClamp, specularAA } = manager;
     const exposure = this.renderer.toneMappingExposure;
-    this.geometry = new WebGpuGeometry(this.renderer, { scene, camera, samples, exposure, grazingClamp, specularAA });
-    this.transparency = new WebGpuTransparency(this.renderer, { scene, camera, exposure, reactiveMask: true });
-    this.taa = new WebGpuTemporalAA(this.renderer, { scene, camera, exposure, ...MODERN_TAA });
+    this.geometry = own(new WebGpuGeometry(this.renderer, { scene, camera, samples, exposure, grazingClamp, specularAA }));
+    this.transparency = own(new WebGpuTransparency(this.renderer, { scene, camera, exposure, reactiveMask: true }));
+    this.taa = own(new WebGpuTemporalAA(this.renderer, { scene, camera, exposure, ...MODERN_TAA }));
     this.taa.velocityBuffer = manager.useVelocityBuffer ? this.geometry : null;
-    this.motionBlur = new WebGpuMotionBlur(this.renderer, { shutter: 0.8 });
+    this.motionBlur = own(new WebGpuMotionBlur(this.renderer, { shutter: 0.8 }));
     this.motionBlur.enabled = manager.motionBlur;
-    this.postColor = new WebGpuPostColor(this.renderer, { smaa: manager.smaa });
+    this.postColor = own(new WebGpuPostColor(this.renderer, { smaa: manager.smaa }));
     this.presentationSource = T.texture(new GPU.Texture());
     // Renderer output conversion is the single scene-linear/display-linear → sRGB boundary.
-    this.presentation = new FullscreenPass(this.renderer, this.presentationSource, { name: 'NativePresentation' });
+    this.presentation = own(new FullscreenPass(this.renderer, this.presentationSource, { name: 'NativePresentation' }));
     this.passes = [this.geometry, this.transparency, this.taa, this.motionBlur,
       { effects: [this.postColor.bloom, this.postColor.gt7ToneMapping, this.postColor.reinhardToneMapping, this.postColor.dithering] }];
     manager.geometryPass = this.geometry;
@@ -47,6 +50,7 @@ export class WebGpuPipeline {
     manager.reinhardToneMapping = this.postColor.reinhardToneMapping;
     manager.smaaPass = this.postColor.smaaPass;
     this.lastSignature = '';
+    } catch (error) { this.dispose(); throw error; }
   }
   async compile() {
     if (this.postColor.initialize) await this.postColor.initialize();
@@ -132,7 +136,7 @@ export class WebGpuPipeline {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
-    for (const pass of [this.presentation, this.postColor, this.motionBlur, this.taa, this.transparency, this.geometry]) pass.dispose();
+    for (const pass of this.owned.splice(0).reverse()) pass.dispose();
     this.latest = this.finalTarget = null;
   }
 }

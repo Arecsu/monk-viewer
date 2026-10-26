@@ -499,6 +499,10 @@ class MonkView extends HTMLElement {
     }
     // Reconnecting must not reuse a context-bound or transferred canvas.
     this.canvas = this.canvas.cloneNode(false) as HTMLCanvasElement;
+    this.removeAttribute('ready');
+    this.removeAttribute('loaded');
+    this.removeAttribute('interactive');
+    this.isInteractive = false;
   }
 
   disconnectedCallback(): void {

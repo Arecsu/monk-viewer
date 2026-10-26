@@ -170,6 +170,9 @@ class ThreeSceneManager {
 		this.setupControls()
 		this.setupScene()
 		try {
+			// Return the stable manager handle before observable initialization callbacks can re-enter its owner.
+			await Promise.resolve()
+			if (this.disposed) return this
 			await this.setupRenderer()
 			if (this.disposed) return this
 			await this.setupPostProcessing()
@@ -231,7 +234,7 @@ class ThreeSceneManager {
 	}
 
 	scheduleFrame(callback) {
-		if (!this.disposed && this.isRendering) this.frameRequest = requestAnimationFrame(() => {
+		if (!this.disposed && this.isRendering && this.frameRequest === null) this.frameRequest = requestAnimationFrame(() => {
 			this.frameRequest = null
 			try { callback() } catch (error) { this.handleBackendFailure(error) }
 		})
