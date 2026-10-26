@@ -76,11 +76,14 @@ export function cylinder(distance, length) {
 
 }
 
-/** Interleaved gradient noise (Jimenez 2014): deterministic in pixel and frame. */
+/**
+ * Interleaved gradient noise (Jimenez 2014): deterministic in pixel and frame. x/y are integer logical pixel
+ * coordinates; the reference samples gl_FragCoord.xy, so the noise pattern is evaluated at the pixel centers.
+ */
 export function interleavedGradientNoise(x, y, frame) {
 
-    const nx = x + NOISE_FRAME_SCALE * frame;
-    const ny = y + NOISE_FRAME_SCALE * frame;
+    const nx = x + 0.5 + NOISE_FRAME_SCALE * frame;
+    const ny = y + 0.5 + NOISE_FRAME_SCALE * frame;
 
     return fract(NOISE_SCALE * fract(nx * NOISE[0] + ny * NOISE[1]));
 
@@ -203,7 +206,8 @@ function tslCylinder(distance, length) {
 
 function tslNoise(pixel, frame) {
 
-    const p = T.vec2(T.float(pixel.x), T.float(pixel.y));
+    // gl_FragCoord.xy is the pixel center: integer logical pixel + 0.5 on both axes.
+    const p = T.vec2(T.float(pixel.x).add(0.5), T.float(pixel.y).add(0.5));
 
     return T.fract(T.float(NOISE_SCALE).mul(
         T.fract(T.dot(p.add(T.vec2(frame.mul(NOISE_FRAME_SCALE))), T.vec2(...NOISE)))
@@ -243,18 +247,22 @@ export class WebGpuMotionBlur {
         this.columnsUniform = T.uniform(1, "int");
         this.rowsUniform = T.uniform(1, "int");
 
-        // One texture node per material: the value is rebound every render, so a TAA toggle can neither keep nor
-        // read stale state. A dummy uv keeps TextureNode clones from applying a texture matrix to textureLoad().
-        this.tileMaxXStateNode = T.texture(new GPU.Texture(), T.vec2(0, 0));
-        this.gatherStateNode = T.texture(new GPU.Texture(), T.vec2(0, 0));
-        this.rowNode = T.texture(new GPU.Texture(), T.vec2(0, 0));
-        this.tileNode = T.texture(new GPU.Texture(), T.vec2(0, 0));
-        this.colorNode = T.texture(new GPU.Texture(), T.vec2(0, 0));
-
         this.tileMaxXTarget = createTarget(1, 1, { format: "rgba16float", nearest: true });
         this.tileMaxTarget = createTarget(1, 1, { format: "rgba16float", nearest: true });
         this.neighbourMaxTarget = createTarget(1, 1, { format: "rgba16float", nearest: true });
         this.outputTarget = createTarget(1, 1);
+
+        // Reduction sources are the component's own targets and stay bound for their lifetime. A dummy uv keeps
+        // TextureNode clones from applying a texture matrix to textureLoad().
+        this.rowNode = T.texture(this.tileMaxXTarget.texture, T.vec2(0, 0));
+        this.tileNode = T.texture(this.tileMaxTarget.texture, T.vec2(0, 0));
+        this.neighbourNode = T.texture(this.neighbourMaxTarget.texture, T.vec2(0, 0));
+
+        // The state and colour inputs are borrowed and rebound every render, so a TAA toggle can neither keep nor
+        // read stale state.
+        this.tileMaxXStateNode = T.texture(new GPU.Texture(), T.vec2(0, 0));
+        this.gatherStateNode = T.texture(new GPU.Texture(), T.vec2(0, 0));
+        this.colorNode = T.texture(new GPU.Texture(), T.vec2(0, 0));
 
         this.tileMaxXPass = new FullscreenPass(renderer, this.createTileMaxXFragment(), {
             target: this.tileMaxXTarget,
@@ -338,6 +346,12 @@ export class WebGpuMotionBlur {
     setSize(width, height) {
 
         this.applyLayout(Math.max(1, Math.floor(width)), Math.max(1, Math.floor(height)));
+
+    }
+
+    reset() {
+
+        this._frame = 0;
 
     }
 
@@ -542,7 +556,7 @@ export class WebGpuMotionBlur {
 
                 const colorX = loadLogical(this.colorNode, pixel, this.heightUniform).rgb;
                 const tile = T.ivec2(pixel.x.div(this.tileSizeUniform), pixel.y.div(this.tileSizeUniform));
-                const vN = loadLogical(this.tileNode, tile, this.rowsUniform).xy;
+                const vN = loadLogical(this.neighbourNode, tile, this.rowsUniform).xy;
                 const lengthN = T.length(vN);
 
                 T.If(lengthN.lessThan(0.5), () => {

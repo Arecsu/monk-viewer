@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Texture, Vector4 } from "three";
+import { Scene, Texture, Vector4 } from "three";
+import { WebGPURenderer, WGSLNodeBuilder } from "three/webgpu";
 import {
     WebGpuMotionBlur,
     blurVector,
@@ -38,6 +39,57 @@ class RecordingRenderer {
     render() {
 
         this.calls.push({ op: "render" });
+
+    }
+
+}
+
+function shaderRenderer(): WebGPURenderer {
+
+    const canvas = {
+        width: 1,
+        height: 1,
+        style: {},
+        addEventListener() {},
+        removeEventListener() {},
+        getContext() {
+
+            return null;
+
+        }
+    };
+    const renderer = new WebGPURenderer({ canvas: canvas as any });
+    // Shader generation only: no device, queue or render call is used.
+    renderer.hasFeature = () => true;
+    renderer.hasCompatibility = () => false;
+    renderer.backend.utils = { getTextureSampleData: () => ({ primarySamples: 1 }) } as any;
+    return renderer;
+
+}
+
+function buildFragment(renderer: WebGPURenderer, pass: any): { builder: any, code: string } {
+
+    const builder = new WGSLNodeBuilder(pass.quad, renderer);
+    builder.camera = pass.quad.camera;
+    builder.scene = new Scene();
+    builder.build();
+    return { builder, code: builder.fragmentShader };
+
+}
+
+function textureBindings(builder: any): Texture[] {
+
+    return builder.uniforms.fragment.filter((uniform: any) => uniform.type === "texture")
+        .map((uniform: any) => uniform.node.value);
+
+}
+
+function assertSameTextures(actual: Texture[], expected: Texture[]): void {
+
+    assert.equal(actual.length, expected.length);
+    for(const texture of expected) {
+
+        assert.ok(actual.includes(texture));
 
     }
 
@@ -201,7 +253,20 @@ test("gather weights foreground over background without bleeding a sharp foregro
 
 });
 
-test("interleaved gradient noise is deterministic in pixel and frame", () => {
+test("interleaved gradient noise is deterministic in pixel and frame at pixel centers", () => {
+
+    const raw = (x: number, y: number, frame: number) => {
+
+        const fract = (value: number) => value - Math.floor(value);
+        const nx = x + 5.588238 * frame;
+        const ny = y + 5.588238 * frame;
+        return fract(52.9829189 * fract(nx * 0.06711056 + ny * 0.00583715));
+
+    };
+
+    // Reference noise(gl_FragCoord.xy): the integer logical pixel is lifted to its center.
+    close(interleavedGradientNoise(17, 29, 3), raw(17.5, 29.5, 3), 1e-15);
+    assert.notEqual(interleavedGradientNoise(17, 29, 3), raw(17, 29, 3));
 
     const value = interleavedGradientNoise(17, 29, 3);
     assert.equal(interleavedGradientNoise(17, 29, 3), value);
@@ -216,6 +281,43 @@ test("interleaved gradient noise is deterministic in pixel and frame", () => {
 
     }
     assert.equal(frames.size, 8);
+
+});
+
+test("reduction and gather passes bind their exact reduction textures", () => {
+
+    const renderer = shaderRenderer();
+    const blur = new WebGpuMotionBlur(renderer);
+    blur.setSize(900, 600);
+
+    assert.equal(blur.rowNode.value, blur.tileMaxXTarget.texture);
+    assert.equal(blur.tileNode.value, blur.tileMaxTarget.texture);
+    assert.equal(blur.neighbourNode.value, blur.neighbourMaxTarget.texture);
+    assert.notEqual(blur.tileNode, blur.neighbourNode);
+
+    const color = new Texture();
+    const state = new Texture();
+    blur.tileMaxXStateNode.value = state;
+    blur.gatherStateNode.value = state;
+    blur.colorNode.value = color;
+
+    const tileMaxX = buildFragment(renderer, blur.tileMaxXPass);
+    const tileMaxY = buildFragment(renderer, blur.tileMaxYPass);
+    const neighbour = buildFragment(renderer, blur.neighbourMaxPass);
+    const gather = buildFragment(renderer, blur.gatherPass);
+
+    assertSameTextures(textureBindings(tileMaxX.builder), [state]);
+    assertSameTextures(textureBindings(tileMaxY.builder), [blur.tileMaxXTarget.texture]);
+    assertSameTextures(textureBindings(neighbour.builder), [blur.tileMaxTarget.texture]);
+    assertSameTextures(textureBindings(gather.builder), [
+        blur.neighbourMaxTarget.texture, color, state
+    ]);
+    assert.ok(!textureBindings(gather.builder).includes(blur.tileMaxTarget.texture));
+
+    // Generated noise input is the pixel center, as in the reference noise(gl_FragCoord.xy).
+    assert.match(gather.code, /vec2<f32>\( \( f32\( [\w.]+ \) \+ 0\.5 \), \( f32\( [\w.]+ \) \+ 0\.5 \) \)/);
+
+    blur.dispose();
 
 });
 
@@ -290,6 +392,30 @@ test("disabled or motionless input bypasses the passes without stale state", () 
     assert.equal(blur.softDepth, 0.1);
 
     blur.dispose();
+    blur.dispose();
+
+});
+
+test("reset restarts the deterministic noise frame sequence", () => {
+
+    const renderer = new RecordingRenderer();
+    const blur = new WebGpuMotionBlur(renderer);
+    blur.setSize(64, 48);
+    const color = new Texture();
+    const state = new Texture();
+    const render = () => blur.render({ color, state, hasMotion: true });
+
+    render();
+    assert.equal(blur.frameUniform.value, 0);
+    render();
+    assert.equal(blur.frameUniform.value, 1);
+    render();
+    assert.equal(blur.frameUniform.value, 2);
+
+    blur.reset();
+    render();
+    assert.equal(blur.frameUniform.value, 0);
+
     blur.dispose();
 
 });
