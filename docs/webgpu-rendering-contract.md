@@ -1,4 +1,4 @@
-# Native WebGPU rendering contract — v1.1
+# Native WebGPU rendering contract — v1.2
 
 Status: implementation contract, NOT acceptance evidence. Supervisor approves changes. WebGL remains reference/default until full acceptance; `auto` must not prefer an unaccepted backend.
 
@@ -12,7 +12,7 @@ Order: TAA beginFrame/jitter → opaque forward encoded MSAA + velocity MRT → 
 
 Opaque: `rg11b10ufloat` encoded HDR + `rgba16float` nearest velocity, `depth32float`, actual 4x samples by default. Resolve color using hardware; discard MSAA color only after resolving; retain MSAA depth. No reverse depth. Hardware depth 0 near / 1 far. Depth policy is **sample 0**, explicitly exported to a real single-sample depth32float attachment for glass depth testing; TAA reads that same sample-0 depth, never an undefined implicit resolve. Depth silhouette parity remains an acceptance gate.
 
-Decode/composited HDR, blur and bloom: rg11b10ufloat. TAA histories rgba16float linear filtered, output rg11b10ufloat, state rgba16float nearest. State = (positive view depth or 0 background, lock, motion pixels XY). Reactive = r8unorm. Tone mapping is the only HDR→display boundary; preserve linear scene color before it and sRGB encode exactly once on presentation. Environment is scene-linear HDR, maps retain source color spaces. No hidden persistent WebGL environment decoder.
+Decode/composited HDR, blur and bloom: rg11b10ufloat. TAA histories rgba16float linear filtered, output rg11b10ufloat, state rgba16float nearest. State = (positive view depth or 0 background, lock, motion pixels XY). Reactive = r8unorm. Final display-linear target = rgba16float (do not add a reduced-mantissa rg11b10 display quantization before the canvas); preserve the reference sRGB8 interstage boundary when optional SMAA is enabled. Tone mapping is the only HDR→display boundary; preserve linear scene color before it and sRGB encode exactly once on presentation. Environment is scene-linear HDR, maps retain source color spaces. No hidden persistent WebGL environment decoder.
 
 Native texture storage and screenCoordinate are top-left. **Algorithmic coordinates are WebGL logical bottom-left** for exact porting: Common.logicalUV, logicalPixel, sampleLogical and loadLogical flip Y at the storage boundary only. Velocity remains (current−previous) UV, positive X right, positive Y up; Z = previous view depth/current view depth−1, W=0. TAA reprojection matrices are WebGL NDC (Z −1..1); Common.webglProjection converts the native camera projection without changing near/far. Actual geometry camera uses renderer.coordinateSystem. Never flip motion Y twice.
 

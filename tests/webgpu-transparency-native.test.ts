@@ -162,7 +162,8 @@ test("exports sample 0 into a real single-sample depth32float attachment", () =>
     assert.equal(result.depth.renderTarget, result.target, "the export must land in a real depth attachment");
     assert.equal(result.target.depthTexture, result.depth);
     assert.equal(result.target.samples, 0, "the glass target and its depth attachment are single sample");
-    assert.equal(result.target.texture.internalFormat, "rg11b10ufloat");
+    // Contract v1.3: WebGPU cannot blend into rg11b10ufloat, so the glass composite target is rgba16float.
+  assert.equal(result.target.texture.internalFormat, "rgba16float");
     assert.equal(result.color, result.target.texture, "the colour is the composited HDR colour");
     assert.equal(transparency.width, 8);
     assert.equal(transparency.height, 4);

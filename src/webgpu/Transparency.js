@@ -282,6 +282,10 @@ export class WebGpuTransparency {
 			fog: false
 		} );
 		this.reactiveMaskMaterial.forceSinglePass = true;
+		// WebGPU does not allow blending into a single-channel r8unorm attachment, and three's scene-override path
+		// forces `transparent` on the override material. The mask shader writes alpha 1 for every fragment, so the
+		// reference normal blend was already an exact write: NoBlending keeps the pipeline valid and the values equal.
+		this.reactiveMaskMaterial.blending = GPU.NoBlending;
 		this.reactiveMaskMaterial.fragmentNode = facingMaskNode();
 
 		this.exportQuad = new GPU.QuadMesh( this.exportMaterial );
@@ -405,7 +409,7 @@ export class WebGpuTransparency {
 		if ( this.glassTarget === null ) {
 
 			// Decoded HDR plus glass compositing: same format as the geometry pass colour, never the display canvas.
-			this.glassTarget = createTarget( width, height, { format: 'rg11b10ufloat', depth: true } );
+			this.glassTarget = createTarget( width, height, { format: 'rgba16float', depth: true } );
 
 			// The exported depth is the glass target's real depth attachment; the mask target borrows the same texture,
 			// so the mask is depth tested against the very opaque depth the glass tests against. Neither target is

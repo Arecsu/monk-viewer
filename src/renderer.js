@@ -182,15 +182,18 @@ class ThreeSceneManager {
 			if (this.backendStatus.selected === 'webgpu') {
 				this.handleResize(true)
 				// Compile/upload on a staging canvas before binding the user's canvas.
+				this.renderer.backend.device.pushErrorScope('validation')
 				this.pipeline.render({ present: false })
+				const validationError = await this.renderer.backend.device.popErrorScope()
 				await this.renderer.backend.device.queue.onSubmittedWorkDone()
+				if (validationError) throw new Error(`WebGPU validation: ${validationError.message}`)
 				if (this.nativeErrors.length) throw new Error(this.nativeErrors.join('; '))
 				if (this.disposed) return this
 				const { CanvasTarget } = await import('three/webgpu')
 				this.renderer.setCanvasTarget(new CanvasTarget(this.canvas))
 				this.canvasBound = true
 				this.handleResize(true)
-				this.pipeline.reset()
+				this.pipeline.resetHistory()
 			}
 			this.isReady = true
 			this.reportBackend({ phase: 'ready' })
@@ -824,6 +827,12 @@ class ThreeSceneManager {
 			this.scheduleFrame(render)
 		}
 		if (this.frameRequest === null) this.scheduleFrame(render)
+	}
+
+	resetHistory() {
+		if (this.backendStatus.selected === 'webgpu') { this.pipeline?.resetHistory(); return }
+		this.taa?.reset()
+		this.velocityBuffer.initialized = false
 	}
 
 	getWorkingPixelRatio() {

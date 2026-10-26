@@ -661,7 +661,9 @@ export const createToneMappingNode = ({
 	const inputColor = sampleLogical(source, uv);
 	const bloomSample = sampleLogical(bloom, uv);
 	// Fused EffectPass bloom + tone mapping: add in HDR before GT7, with AddBlendFunction alpha semantics.
-	const base = V4(inputColor.rgb.add(bloomSample.rgb.mul(bloomIntensity)),
+	// TSL's vec4() accepts four components or one vector, never (vec3, float): build all four explicitly.
+	const baseRgb = inputColor.rgb.add(bloomSample.rgb.mul(bloomIntensity));
+	const base = V4(baseRgb.x, baseRgb.y, baseRgb.z,
 		T.max(inputColor.a, bloomSample.a.mul(bloomIntensity))).toVar();
 	const color = base.rgb.toVar();
 
@@ -696,6 +698,6 @@ export const createToneMappingNode = ({
 	});
 
 	color.assign(T.select(quantize.greaterThan(0.5), quantizeSRGB8Node(color), color));
-	return V4(color, base.a);
+	return V4(color.x, color.y, color.z, base.a);
 
 })();
