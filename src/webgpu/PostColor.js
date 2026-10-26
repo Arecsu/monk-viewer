@@ -8,7 +8,6 @@ import {
 	bloomDownsampleSizes,
 	bloomLevelPlan,
 	bloomUpsampleSizes,
-	createBloomCompositeNode,
 	createDownsampleNode,
 	createLuminanceNode,
 	createToneMappingNode,
@@ -279,7 +278,6 @@ export class WebGpuPostColor {
 		this.outputTarget = createTarget(1, 1, { format: 'rgba16float' });
 		this.displayTarget = createTarget(1, 1, { format: 'rgba16float' });
 		this.luminanceTarget = createTarget(1, 1, { format: 'rg11b10ufloat' });
-		this.bloomCompositeTarget = createTarget(1, 1, { format: 'rg11b10ufloat' });
 
 		this._downTargets = [];
 		this._upTargets = [];
@@ -299,17 +297,12 @@ export class WebGpuPostColor {
 			padding: this._luminancePadding
 		}), { target: this.luminanceTarget, name: 'BloomLuminance' });
 
-		this._compositeSource = T.texture(this.outputTarget.texture, T.vec2(0, 0));
-		this._compositeBloom = T.texture(this.outputTarget.texture, T.vec2(0, 0));
-		this._compositePass = new FullscreenPass(renderer, createBloomCompositeNode({
-			input: this._compositeSource,
-			bloom: this._compositeBloom,
-			intensity: this.uBloomIntensity
-		}), { target: this.bloomCompositeTarget, name: 'BloomComposite' });
-
 		this._toneSource = T.texture(this.outputTarget.texture, T.vec2(0, 0));
+		this._toneBloom = T.texture(this.outputTarget.texture, T.vec2(0, 0));
 		this._tonePass = new FullscreenPass(renderer, createToneMappingNode({
 			source: this._toneSource,
+			bloom: this._toneBloom,
+			bloomIntensity: this.uBloomIntensity,
 			resolution: this.uResolution,
 			gt7Enabled: this.gt7ToneMapping.enabledUniform,
 			gt7Exposure: this.gt7ToneMapping.exposureUniform,
@@ -337,7 +330,11 @@ export class WebGpuPostColor {
 				lookup: smaaOptions.lookup ?? options.smaaLookup ?? null,
 				searchURL: smaaOptions.searchURL ?? options.smaaSearchURL ?? undefined,
 				areaURL: smaaOptions.areaURL ?? options.smaaAreaURL ?? undefined,
-				enabled: smaaOptions.enabled ?? true
+				enabled: smaaOptions.enabled ?? true,
+				predicationMode: smaaOptions.predicationMode,
+				predicationThreshold: smaaOptions.predicationThreshold,
+				predicationScale: smaaOptions.predicationScale,
+				predicationStrength: smaaOptions.predicationStrength
 			});
 		}
 
@@ -350,7 +347,7 @@ export class WebGpuPostColor {
 
 		this.uBloomThreshold.value = this.bloom.luminanceThreshold;
 		this.uBloomSmoothing.value = this.bloom.luminanceSmoothing;
-		this.uBloomIntensity.value = this.bloom.intensity;
+		this.uBloomIntensity.value = this.bloom.enabled ? this.bloom.intensity : 0;
 		this.uBloomRadius.value = this.bloom.radius;
 		this.uBloomClamp.value = this.bloom.clampToBorder ? 1 : 0;
 
@@ -435,7 +432,6 @@ export class WebGpuPostColor {
 		this.outputTarget.setSize(w, h);
 		this.displayTarget.setSize(w, h);
 		this.luminanceTarget.setSize(lumWidth, lumHeight);
-		this.bloomCompositeTarget.setSize(w, h);
 		this._resizeTargets(this._downTargets, downSizes);
 		this._resizeTargets(this._upTargets, upSizes);
 
@@ -535,13 +531,11 @@ export class WebGpuPostColor {
 			bloomTexture = upPrevious;
 		}
 
-		this._compositeSource.value = source;
-		this._compositeBloom.value = bloomTexture;
-		this._compositePass.render(this.bloomCompositeTarget);
+		return bloomTexture;
 
 	}
 
-	render({ color, bounds } = {}) {
+	render({ color, bounds, depth, camera } = {}) {
 
 		if(this.disposed) throw new Error('WebGpuPostColor is disposed');
 		const source = textureOf(color);
@@ -553,19 +547,19 @@ export class WebGpuPostColor {
 		this._syncControls();
 		this._updateBounds(bounds);
 
-		let toneSource = source;
-		if(this.bloom.enabled) {
-			this._renderBloom(source);
-			toneSource = this.bloomCompositeTarget.texture;
-		}
-
 		const smaaActive = this.smaaPass !== null && this.smaaPass.enabled && this.smaaPass.ready;
+		if(smaaActive) this.smaaPass.validatePredication(depth, camera);
+
+		let bloomTexture = source;
+		if(this.bloom.enabled) bloomTexture = this._renderBloom(source);
+
 		this.uQuantize.value = smaaActive ? 1 : 0;
-		this._toneSource.value = toneSource;
+		this._toneSource.value = source;
+		this._toneBloom.value = bloomTexture;
 		const target = smaaActive ? this.displayTarget : this.outputTarget;
 		this._tonePass.render(target);
 
-		if(smaaActive) this.smaaPass.render(this.displayTarget.texture, this.outputTarget);
+		if(smaaActive) this.smaaPass.render(this.displayTarget.texture, this.outputTarget, { depth, camera });
 		return { color: this.outputTarget.texture, target: this.outputTarget };
 
 	}
@@ -575,7 +569,6 @@ export class WebGpuPostColor {
 		if(this.disposed) return;
 		this.disposed = true;
 		this._luminancePass.dispose();
-		this._compositePass.dispose();
 		this._tonePass.dispose();
 		for(const entry of this._downPasses) entry.pass.dispose();
 		for(const entry of this._upPasses) entry.pass.dispose();
@@ -584,7 +577,6 @@ export class WebGpuPostColor {
 		this.outputTarget.dispose();
 		this.displayTarget.dispose();
 		this.luminanceTarget.dispose();
-		this.bloomCompositeTarget.dispose();
 		for(const target of this._downTargets) target.dispose();
 		for(const target of this._upTargets) target.dispose();
 		this._downTargets = [];

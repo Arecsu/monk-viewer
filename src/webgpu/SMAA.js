@@ -16,6 +16,7 @@ import { srgbEncodeNode, sampleLogicalOffset } from './PostColorShaders.js';
  */
 
 export const SMAAPreset = Object.freeze({ LOW: 0, MEDIUM: 1, HIGH: 2, ULTRA: 3 });
+export const SMAAPredicationMode = Object.freeze({ DISABLED: 0, DEPTH: 1, CUSTOM: 2 });
 
 export const SMAA_PRESETS = Object.freeze({
 	[SMAAPreset.LOW]: Object.freeze({
@@ -53,7 +54,17 @@ export const SMAA_CONSTANTS = Object.freeze({
 	SEARCHTEX_PACKED_HEIGHT: 16,
 	LOCAL_CONTRAST_ADAPTATION_FACTOR: 2.0,
 	EDGE_DETECTION_MODE: 2, // COLOR
-	PREDICATION_MODE: 0 // DISABLED
+	PREDICATION_MODE: 0, // SMAAEdgeDetectionMaterial default; SMAAEffect overrides with DEPTH
+	PREDICATION_THRESHOLD: 0.0002,
+	PREDICATION_SCALE: 2,
+	PREDICATION_STRENGTH: 1
+});
+
+export const SMAA_EFFECT_DEFAULTS = Object.freeze({
+	predicationMode: SMAAPredicationMode.DEPTH,
+	predicationThreshold: 0.0002,
+	predicationScale: 2,
+	predicationStrength: 1
 });
 
 export const smaaSearchTextureURL = new URL('../postprocessing/smaa/search.png', import.meta.url);
@@ -117,11 +128,23 @@ export async function decodeSMAALookupTextures({
 	areaURL = smaaAreaTextureURL
 } = {}) {
 
-	const [search, area] = await Promise.all([fetchBitmap(searchURL, true), fetchBitmap(areaURL, false)]);
+	// allSettled is required for cleanup: Promise.all rejects early and would leak the bitmap that still resolves.
+	const results = await Promise.allSettled([fetchBitmap(searchURL, true), fetchBitmap(areaURL, false)]);
+	const search = results[0].status === 'fulfilled' ? results[0].value : null;
+	const area = results[1].status === 'fulfilled' ? results[1].value : null;
+	if(search === null || area === null) {
+		search?.close?.();
+		area?.close?.();
+		throw results.find((result) => result.status === 'rejected').reason;
+	}
 	return { search, area };
 
 }
 
+/**
+ * Wraps decoded bitmaps in lookup textures. The returned resource owns both textures and the ImageBitmaps:
+ * Texture.dispose() never closes bitmaps, so callers must use resource.dispose().
+ */
 export function createSMAALookupTextures({ search, area }) {
 
 	const searchTexture = new GPU.Texture(search);
@@ -142,7 +165,23 @@ export function createSMAALookupTextures({ search, area }) {
 	areaTexture.colorSpace = GPU.NoColorSpace;
 	areaTexture.needsUpdate = true;
 
-	return { searchTexture, areaTexture };
+	let disposed = false;
+	return {
+		searchTexture,
+		areaTexture,
+		searchBitmap: search,
+		areaBitmap: area,
+		dispose() {
+
+			if(disposed) return;
+			disposed = true;
+			searchTexture.dispose();
+			areaTexture.dispose();
+			search?.close?.();
+			area?.close?.();
+
+		}
+	};
 
 }
 
@@ -164,6 +203,38 @@ const decodeDiagBilinearAccess2 = (e) => V2(
 	T.round(e.x.mul(e.x.mul(5).sub(3.75).abs())), e.y
 );
 
+/**
+ * CPU port of the reference getOrthographicDepth (packing.glsl.js, no reversed/log depth).
+ */
+export function getOrthographicDepth(depth, near, far, isPerspectiveCamera) {
+
+	if(!isPerspectiveCamera) return depth;
+	// perspectiveDepthToViewZ: near*far / ((far-near)*depth - far)
+	const viewZ = near * far / ((far - near) * depth - far);
+	// viewZToOrthographicDepth: (viewZ+near)/(near-far)
+	return (viewZ + near) / (near - far);
+
+}
+
+/**
+ * CPU port of the predicated threshold in SMAAEdgeDetectionMaterial.
+ */
+export function calculatePredicatedThreshold({
+	depth,
+	left,
+	top,
+	edgeThreshold,
+	predicationThreshold = SMAA_EFFECT_DEFAULTS.predicationThreshold,
+	predicationScale = SMAA_EFFECT_DEFAULTS.predicationScale,
+	predicationStrength = SMAA_EFFECT_DEFAULTS.predicationStrength
+}) {
+
+	const delta = [Math.abs(depth - left), Math.abs(depth - top)];
+	return delta.map((value) => predicationScale * edgeThreshold *
+		(1 - predicationStrength * (value >= predicationThreshold ? 1 : 0)));
+
+}
+
 export class WebGpuSMAA {
 
 	constructor(renderer, {
@@ -173,22 +244,34 @@ export class WebGpuSMAA {
 		lookup = null,
 		searchURL = smaaSearchTextureURL,
 		areaURL = smaaAreaTextureURL,
-		enabled = true
+		enabled = true,
+		predicationMode = SMAA_EFFECT_DEFAULTS.predicationMode,
+		predicationThreshold = SMAA_EFFECT_DEFAULTS.predicationThreshold,
+		predicationScale = SMAA_EFFECT_DEFAULTS.predicationScale,
+		predicationStrength = SMAA_EFFECT_DEFAULTS.predicationStrength
 	} = {}) {
+
+		if(predicationMode === SMAAPredicationMode.CUSTOM) {
+			throw new Error('SMAA CUSTOM predication requires a predication buffer, which the PostColor contract does not expose');
+		}
+		if(predicationMode !== SMAAPredicationMode.DISABLED && predicationMode !== SMAAPredicationMode.DEPTH) {
+			throw new Error(`Unknown SMAA predication mode: ${predicationMode}`);
+		}
 
 		this.renderer = renderer;
 		this.enabled = enabled;
 		this.disposed = false;
 		this.ready = false;
 		this.error = null;
+		this._predicationMode = predicationMode;
 		this._preset = resolvePreset(preset);
 		this._settings = { ...SMAA_PRESETS[this._preset] };
 		this._searchURL = searchURL;
 		this._areaURL = areaURL;
 		this._lookup = lookup;
-		this._ownsLookup = false;
 		this.searchTexture = null;
 		this.areaTexture = null;
+		this._lookupResources = null;
 		this._edgePass = null;
 		this._weightsPass = null;
 		this._blendPass = null;
@@ -198,11 +281,19 @@ export class WebGpuSMAA {
 		this.edgeTarget = createRGBA8Target(1, 1);
 		this.weightsTarget = createRGBA8Target(1, 1);
 		this.outputTarget = createTarget(1, 1, { format: 'rgba16float' });
+		this._depthPlaceholder = new GPU.DepthTexture(1, 1, GPU.FloatType);
+		this._depthSource = T.texture(this._depthPlaceholder, V2(0, 0));
 
 		this.uResolution = T.uniform(new GPU.Vector2(1, 1));
 		this.uTexel = T.uniform(new GPU.Vector2(1, 1));
 		this.uEdgeThreshold = T.uniform(this._settings.edgeDetectionThreshold);
 		this.uLocalContrast = T.uniform(SMAA_CONSTANTS.LOCAL_CONTRAST_ADAPTATION_FACTOR);
+		this.uCameraNear = T.uniform(1);
+		this.uCameraFar = T.uniform(1000);
+		this.uPerspective = T.uniform(1);
+		this.uPredicationThreshold = T.uniform(predicationThreshold);
+		this.uPredicationScale = T.uniform(predicationScale);
+		this.uPredicationStrength = T.uniform(predicationStrength);
 
 		this.setSize(width, height);
 
@@ -297,12 +388,37 @@ export class WebGpuSMAA {
 
 	}
 
+	get predicationMode() { return this._predicationMode; }
+	set predicationMode(value) {
+
+		if(value === SMAAPredicationMode.CUSTOM) {
+			throw new Error('SMAA CUSTOM predication requires a predication buffer, which the PostColor contract does not expose');
+		}
+		if(value !== SMAAPredicationMode.DISABLED && value !== SMAAPredicationMode.DEPTH) {
+			throw new Error(`Unknown SMAA predication mode: ${value}`);
+		}
+		if(value === this._predicationMode) return;
+		this._predicationMode = value;
+		this._rebuildMaterials();
+
+	}
+
+	get predicationThreshold() { return this.uPredicationThreshold.value; }
+	set predicationThreshold(value) { this.uPredicationThreshold.value = value; }
+
+	get predicationScale() { return this.uPredicationScale.value; }
+	set predicationScale(value) { this.uPredicationScale.value = value; }
+
+	get predicationStrength() { return this.uPredicationStrength.value; }
+	set predicationStrength(value) { this.uPredicationStrength.value = value; }
+
 	_initializeLookup(lookup) {
 
 		return (async () => {
 
 			let searchTexture = null;
 			let areaTexture = null;
+			let resources = null;
 
 			if(lookup !== null && typeof lookup === 'object') {
 				const search = lookup.searchTexture ?? lookup.search;
@@ -311,8 +427,9 @@ export class WebGpuSMAA {
 					searchTexture = search;
 					areaTexture = area;
 				} else if(search !== undefined && area !== undefined) {
-					({ searchTexture, areaTexture } = createSMAALookupTextures({ search, area }));
-					this._ownsLookup = true;
+					resources = createSMAALookupTextures({ search, area });
+					searchTexture = resources.searchTexture;
+					areaTexture = resources.areaTexture;
 				}
 			}
 
@@ -320,17 +437,16 @@ export class WebGpuSMAA {
 				const bitmaps = await decodeSMAALookupTextures({
 					searchURL: this._searchURL, areaURL: this._areaURL
 				});
-				({ searchTexture, areaTexture } = createSMAALookupTextures(bitmaps));
-				this._ownsLookup = true;
+				resources = createSMAALookupTextures(bitmaps);
+				searchTexture = resources.searchTexture;
+				areaTexture = resources.areaTexture;
 			}
 
 			if(this.disposed) {
-				if(this._ownsLookup) {
-					searchTexture.dispose();
-					areaTexture.dispose();
-				}
+				resources?.dispose();
 				return false;
 			}
+			this._lookupResources = resources;
 			this.searchTexture = searchTexture;
 			this.areaTexture = areaTexture;
 			this._buildMaterials();
@@ -395,9 +511,44 @@ export class WebGpuSMAA {
 			const deltaTop = center.sub(top).abs();
 			const deltaX = T.max(deltaLeft.r, T.max(deltaLeft.g, deltaLeft.b));
 			const deltaY = T.max(deltaTop.r, T.max(deltaTop.g, deltaTop.b));
-			const threshold = this.uEdgeThreshold;
-			const edgesX = T.step(threshold, deltaX);
-			const edgesY = T.step(threshold, deltaY);
+
+			let threshold;
+			if(this._predicationMode === SMAAPredicationMode.DEPTH) {
+				// SMAAEdgeDetectionMaterial getOrthographicDepth + calculatePredicatedThreshold.
+				const depthAt = (sampleUV) => {
+
+					const depth = sampleSMAA(this._depthSource, sampleUV).r;
+					// perspectiveDepthToViewZ then viewZToOrthographicDepth (packing.glsl.js, no reversed depth).
+					const viewZ = this.uCameraNear.mul(this.uCameraFar).div(
+						this.uCameraFar.sub(this.uCameraNear).mul(depth).sub(this.uCameraFar)
+					);
+					const orthographic = viewZ.add(this.uCameraNear)
+						.div(this.uCameraNear.sub(this.uCameraFar));
+					return T.select(this.uPerspective.greaterThan(0.5), orthographic, depth);
+
+				};
+				const depth = depthAt(uv);
+				const depthLeft = depthAt(uv.add(texel.mul(V2(-1, 0))));
+				const depthTop = depthAt(uv.add(texel.mul(V2(0, -1))));
+				const depthDelta = V2(
+					T.abs(depth.sub(depthLeft)),
+					T.abs(depth.sub(depthTop))
+				);
+				const depthEdges = V2(
+					T.step(this.uPredicationThreshold, depthDelta.x),
+					T.step(this.uPredicationThreshold, depthDelta.y)
+				);
+				threshold = V2(
+					this.uPredicationScale.mul(this.uEdgeThreshold)
+						.mul(F(1).sub(this.uPredicationStrength.mul(depthEdges.x))),
+					this.uPredicationScale.mul(this.uEdgeThreshold)
+						.mul(F(1).sub(this.uPredicationStrength.mul(depthEdges.y)))
+				);
+			} else {
+				threshold = V2(this.uEdgeThreshold, this.uEdgeThreshold);
+			}
+			const edgesX = T.step(threshold.x, deltaX);
+			const edgesY = T.step(threshold.y, deltaY);
 
 			const deltaRight = center.sub(right).abs();
 			const deltaBottom = center.sub(bottom).abs();
@@ -852,9 +1003,40 @@ export class WebGpuSMAA {
 
 	}
 
-	render(sourceTexture, target = this.outputTarget) {
+	validatePredication(depth, camera) {
+
+		if(this._predicationMode !== SMAAPredicationMode.DEPTH) return null;
+		if(depth === null || depth === undefined) {
+			throw new Error('SMAA depth predication is enabled but PostColor.render received no depth');
+		}
+		const depthTexture = depth.isTexture === true ? depth :
+			(depth.depthTexture?.isTexture === true ? depth.depthTexture : depth.texture);
+		if(depthTexture?.isTexture !== true) {
+			throw new TypeError('SMAA depth predication expects a depth texture or render target');
+		}
+		if(camera === null || camera === undefined) {
+			throw new Error('SMAA depth predication is enabled but PostColor.render received no camera');
+		}
+		const { near, far, isPerspectiveCamera } = camera;
+		if(typeof near !== 'number' || !Number.isFinite(near) ||
+			typeof far !== 'number' || !Number.isFinite(far) || near === far) {
+			throw new RangeError('SMAA depth predication requires a camera with finite near/far and near != far');
+		}
+		if(typeof isPerspectiveCamera !== 'boolean') {
+			throw new TypeError('SMAA depth predication requires camera.isPerspectiveCamera');
+		}
+		this.uCameraNear.value = near;
+		this.uCameraFar.value = far;
+		this.uPerspective.value = isPerspectiveCamera ? 1 : 0;
+		this._depthSource.value = depthTexture;
+		return depthTexture;
+
+	}
+
+	render(sourceTexture, target = this.outputTarget, { depth, camera } = {}) {
 
 		if(this.disposed || !this.enabled || !this.ready || this._edgePass === null) return null;
+		this.validatePredication(depth, camera);
 		this._edgeSource.value = sourceTexture;
 		this._edgePass.render(this.edgeTarget);
 		this._weightsPass.render(this.weightsTarget);
@@ -875,10 +1057,9 @@ export class WebGpuSMAA {
 		this.edgeTarget.dispose();
 		this.weightsTarget.dispose();
 		this.outputTarget.dispose();
-		if(this._ownsLookup) {
-			this.searchTexture?.dispose();
-			this.areaTexture?.dispose();
-		}
+		this._depthPlaceholder.dispose();
+		this._lookupResources?.dispose();
+		this._lookupResources = null;
 
 	}
 

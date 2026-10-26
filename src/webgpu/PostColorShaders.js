@@ -473,16 +473,6 @@ export const createUpsampleNode = ({
 
 })();
 
-export const createBloomCompositeNode = ({ input, bloom, intensity }) => T.Fn(() => {
-
-	const uv = logicalUV;
-	const base = sampleLogical(input, uv);
-	const bloomSample = sampleLogical(bloom, uv);
-	// AddBlendFunction: rgb = dst + src, alpha = max(dst.a, src.a).
-	return V4(base.rgb.add(bloomSample.rgb.mul(intensity)), T.max(base.a, bloomSample.a.mul(intensity)));
-
-})();
-
 // ---------------------------------------------------------------------------------------------------------------------
 // GT7 / Reinhard / dithering shaders
 // ---------------------------------------------------------------------------------------------------------------------
@@ -650,6 +640,8 @@ function randNode(co) {
 
 export const createToneMappingNode = ({
 	source,
+	bloom,
+	bloomIntensity,
 	resolution,
 	gt7Enabled,
 	gt7Exposure,
@@ -667,7 +659,11 @@ export const createToneMappingNode = ({
 
 	const uv = logicalUV;
 	const inputColor = sampleLogical(source, uv);
-	const color = inputColor.rgb.toVar();
+	const bloomSample = sampleLogical(bloom, uv);
+	// Fused EffectPass bloom + tone mapping: add in HDR before GT7, with AddBlendFunction alpha semantics.
+	const base = V4(inputColor.rgb.add(bloomSample.rgb.mul(bloomIntensity)),
+		T.max(inputColor.a, bloomSample.a.mul(bloomIntensity))).toVar();
+	const color = base.rgb.toVar();
 
 	T.If(gt7Enabled.greaterThan(0.5), () => {
 
@@ -700,6 +696,6 @@ export const createToneMappingNode = ({
 	});
 
 	color.assign(T.select(quantize.greaterThan(0.5), quantizeSRGB8Node(color), color));
-	return V4(color, inputColor.a);
+	return V4(color, base.a);
 
 })();

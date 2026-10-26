@@ -25,8 +25,15 @@ import {
 } from '../src/webgpu/PostColorShaders.js';
 import {
 	SMAA_CONSTANTS,
+	SMAA_EFFECT_DEFAULTS,
 	SMAA_PRESETS,
+	SMAAPredicationMode,
 	SMAAPreset,
+	WebGpuSMAA,
+	calculatePredicatedThreshold,
+	createSMAALookupTextures,
+	decodeSMAALookupTextures,
+	getOrthographicDepth,
 	smaaAreaTextureURL,
 	smaaSearchTextureURL
 } from '../src/webgpu/SMAA.js';
@@ -174,6 +181,10 @@ test('SMAA presets and lookup constants match postprocessing v7', () => {
 	assert.equal(Number(edges.defines.LOCAL_CONTRAST_ADAPTATION_FACTOR), SMAA_CONSTANTS.LOCAL_CONTRAST_ADAPTATION_FACTOR);
 	assert.equal(edges.defines.EDGE_DETECTION_MODE, SMAA_CONSTANTS.EDGE_DETECTION_MODE);
 	assert.equal(edges.defines.PREDICATION_MODE, SMAA_CONSTANTS.PREDICATION_MODE);
+	assert.equal(Number(edges.defines.PREDICATION_THRESHOLD), SMAA_EFFECT_DEFAULTS.predicationThreshold);
+	assert.equal(Number(edges.defines.PREDICATION_SCALE), SMAA_EFFECT_DEFAULTS.predicationScale);
+	assert.equal(Number(edges.defines.PREDICATION_STRENGTH), SMAA_EFFECT_DEFAULTS.predicationStrength);
+	assert.equal(SMAA_EFFECT_DEFAULTS.predicationMode, SMAAPredicationMode.DEPTH);
 	assert.deepEqual(SMAA_PRESETS[SMAAPreset.HIGH], {
 		edgeDetectionThreshold: 0.01,
 		orthogonalSearchSteps: 16,
@@ -184,11 +195,80 @@ test('SMAA presets and lookup constants match postprocessing v7', () => {
 	});
 });
 
+test('SMAA depth predication matches getOrthographicDepth and the reference threshold', () => {
+	const near = 0.1, far = 100, depth = 0.5;
+	const viewZ = near * far / ((far - near) * depth - far);
+	const expected = (viewZ + near) / (near - far);
+	assert.ok(Math.abs(getOrthographicDepth(depth, near, far, true) - expected) < 1e-12);
+	assert.equal(getOrthographicDepth(0.37, near, far, false), 0.37);
+
+	// delta .0001 is below PREDICATION_THRESHOLD .0002; delta .0002 reaches it.
+	assertArrayClose(calculatePredicatedThreshold({
+		depth: 0.5, left: 0.5001, top: 0.5003, edgeThreshold: 0.01
+	}), [0.02, 0]);
+	assertArrayClose(calculatePredicatedThreshold({
+		depth: 0.5, left: 0.4999, top: 0.5003, edgeThreshold: 0.01,
+		predicationScale: 3, predicationStrength: 0.5
+	}), [0.03, 0.015]);
+});
+
 test('SMAA lookup assets exist and are reachable from the worker module', () => {
 	for(const url of [smaaSearchTextureURL, smaaAreaTextureURL]) {
 		const path = fileURLToPath(url);
 		assert.ok(existsSync(path), path);
 		assert.ok(statSync(path).size > 0, path);
+	}
+});
+
+test('tone mapping fuses the HDR bloom add and leaves no composite target', () => {
+	const post = new WebGpuPostColor({}, { width: 8, height: 8 });
+	const source = new DataTexture(new Uint8Array(8 * 8 * 4), 8, 8);
+	source.needsUpdate = true;
+	try {
+		assert.equal(post.bloomCompositeTarget, undefined);
+		assert.equal(post._compositePass, undefined);
+		const noop = () => {};
+		post._luminancePass.render = noop;
+		for(const entry of post._downPasses) entry.pass.render = noop;
+		for(const entry of post._upPasses) entry.pass.render = noop;
+		const originalBloom = post._renderBloom.bind(post);
+		let bloomTexture;
+		post._renderBloom = (src) => {
+
+			bloomTexture = originalBloom(src);
+			return bloomTexture;
+
+		};
+		let tone;
+		post._tonePass.render = (target) => {
+
+			tone = {
+				source: post._toneSource.value,
+				bloom: post._toneBloom.value,
+				intensity: post.uBloomIntensity.value,
+				target
+			};
+
+		};
+
+		const result = post.render({ color: source });
+		assert.equal(tone.source, source);
+		assert.equal(tone.bloom, bloomTexture);
+		assert.notEqual(tone.bloom, source);
+		assert.equal(tone.intensity, post.bloom.intensity);
+		assert.equal(tone.target, post.outputTarget);
+		assert.equal(result.target, post.outputTarget);
+
+		post.bloom.enabled = false;
+		tone = null;
+		bloomTexture = null;
+		post.render({ color: source });
+		assert.equal(tone.bloom, source);
+		assert.equal(tone.intensity, 0);
+		assert.equal(bloomTexture, null);
+	} finally {
+		post.dispose();
+		source.dispose();
 	}
 });
 
@@ -240,18 +320,118 @@ test('SMAA is a real optional pass with worker-ready lookup textures', async () 
 	});
 	try {
 		assert.ok(post.smaaPass !== null);
-		assert.equal(await post.ready, true);
+		const ready = await post.ready;
+		assert.equal(typeof ready, 'boolean');
+		assert.equal(ready, true);
 		assert.equal(post.smaaPass.ready, true);
 		assert.equal(post.smaaPass.preset, SMAAPreset.HIGH);
 		assert.equal(post.smaaPass.orthogonalSearchSteps, 16);
 		assert.equal(post.smaaPass.diagonalSearchSteps, 8);
 		assert.equal(post.smaaPass.cornerDetection, true);
+		assert.equal(post.smaaPass.predicationMode, SMAAPredicationMode.DEPTH);
+		assert.equal(post.smaaPass.predicationThreshold, SMAA_EFFECT_DEFAULTS.predicationThreshold);
+		assert.equal(post.smaaPass.predicationScale, SMAA_EFFECT_DEFAULTS.predicationScale);
+		assert.equal(post.smaaPass.predicationStrength, SMAA_EFFECT_DEFAULTS.predicationStrength);
 		post.smaaPass.enabled = false;
 		assert.equal(post.smaaPass.enabled, false);
 	} finally {
 		post.dispose();
 		search.dispose();
 		area.dispose();
+	}
+});
+
+test('SMAA depth predication fails without depth and does not require depth when disabled', async () => {
+	const search = new DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+	const area = new DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+	search.needsUpdate = true;
+	area.needsUpdate = true;
+	const source = new DataTexture(new Uint8Array(8 * 8 * 4), 8, 8);
+	source.needsUpdate = true;
+	const post = new WebGpuPostColor({}, {
+		width: 8, height: 8, smaa: true, smaaLookup: { search, area }
+	});
+	try {
+		assert.equal(await post.ready, true);
+		post.bloom.enabled = false;
+		assert.throws(() => post.render({ color: source }), /depth/);
+		assert.throws(() => post.render({ color: source, depth: new DataTexture(new Uint8Array(4), 1, 1) }), /camera/);
+
+		post.smaaPass.predicationMode = SMAAPredicationMode.DISABLED;
+		const noop = () => {};
+		post.smaaPass._edgePass.render = noop;
+		post.smaaPass._weightsPass.render = noop;
+		post.smaaPass._blendPass.render = noop;
+		post._tonePass.render = noop;
+		const result = post.render({ color: source });
+		assert.equal(result.target, post.outputTarget);
+	} finally {
+		post.dispose();
+		source.dispose();
+		search.dispose();
+		area.dispose();
+	}
+});
+
+test('SMAA closes owned bitmaps on dispose and on partial lookup failure', async () => {
+	let closed = 0;
+	const searchBitmap = { close() { closed += 1; } };
+	const areaBitmap = { close() { closed += 1; } };
+	const resources = createSMAALookupTextures({ search: searchBitmap, area: areaBitmap });
+	resources.dispose();
+	resources.dispose();
+	assert.equal(closed, 2);
+
+	const originalFetch = globalThis.fetch;
+	const originalCreateImageBitmap = globalThis.createImageBitmap;
+	const originalSearchClose = searchBitmap.close;
+	let partialClosed = 0;
+	searchBitmap.close = () => { partialClosed += 1; };
+	try {
+		globalThis.fetch = async (url) => ({
+			ok: true,
+			blob: async () => ({ tag: String(url).includes('area') ? 'area' : 'search' })
+		});
+		globalThis.createImageBitmap = async (blob) => {
+
+			if(blob.tag === 'area') throw new Error('area decode failed');
+			return searchBitmap;
+
+		};
+		await assert.rejects(decodeSMAALookupTextures({
+			searchURL: 'search.png', areaURL: 'area.png'
+		}), /area decode failed/);
+		assert.equal(partialClosed, 1);
+	} finally {
+		searchBitmap.close = originalSearchClose;
+		globalThis.fetch = originalFetch;
+		if(originalCreateImageBitmap === undefined) delete globalThis.createImageBitmap;
+		else globalThis.createImageBitmap = originalCreateImageBitmap;
+	}
+});
+
+test('SMAA closes decoded bitmaps when disposed before lookup completes', async () => {
+	const originalFetch = globalThis.fetch;
+	const originalCreateImageBitmap = globalThis.createImageBitmap;
+	let closed = 0;
+	const pending = [];
+	try {
+		globalThis.fetch = async () => ({ ok: true, blob: async () => ({}) });
+		globalThis.createImageBitmap = () => new Promise((resolve) => {
+
+			pending.push(() => resolve({ close() { closed += 1; } }));
+
+		});
+		const smaa = new WebGpuSMAA({}, { width: 4, height: 4 });
+		while(pending.length < 2) await new Promise((resolve) => setTimeout(resolve, 0));
+		smaa.dispose();
+		for(const resolve of pending) resolve();
+		assert.equal(await smaa.readyPromise, false);
+		assert.equal(closed, 2);
+	} finally {
+		globalThis.fetch = originalFetch;
+		if(originalCreateImageBitmap === undefined) delete globalThis.createImageBitmap;
+		else globalThis.createImageBitmap = originalCreateImageBitmap;
 	}
 });
 
