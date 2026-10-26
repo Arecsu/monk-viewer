@@ -1,0 +1,45 @@
+{
+  "machine": "MacBook Air M1, 7-core GPU, Chrome, native WebGPU/Metal adapter",
+  "measuredAt": "commit 15f4fce (docs claim corrected to code space below); ablation driver revised after review",
+  "method": {
+    "domain": "sRGB code steps (0..255) computed from both backends' presented frames; the native frame is display-linear rgba16float converted through the sRGB transfer function, the WebGL frame is read as sRGB codes",
+    "note": "This is a code-space statistic. It is NOT the harness's display-linear DISPLAY_TOLERANCE/STILL_TOLERANCE statistic and must not be quoted as passing those gates.",
+    "reference": "unmodified WebGL pipeline, same model/environment/camera/pose, hidden canvas at the same physical size",
+    "frames": 48,
+    "session": "one condition per fresh session; each row re-measured after the driver gained state restore"
+  },
+  "environment": "900x600, 4x MSAA, TAA modern preset, motion blur, 8-level bloom, GT7, dither, SMAA off, grazing clamp off, specular AA on",
+  "rows": [
+    { "toggles": "geometry + glass + GT7 only (TAA, blur, bloom, dither off)", "meanSteps": 0.40, "worstSteps": 56, "pixelsOver2StepsPct": 0.53, "flatOutlierPct": 0, "flatRmseSteps": 0.39, "edgeMeanSteps": 0.56, "coverageDeltaPct": 0.20 },
+    { "toggles": "+ TAA (blur, bloom, dither off)", "meanSteps": 0.41, "worstSteps": 15.8, "pixelsOver2StepsPct": 0.83, "flatOutlierPct": 0, "flatRmseSteps": 0.39, "edgeMeanSteps": 0.64, "coverageDeltaPct": 0.25 },
+    { "toggles": "+ TAA + dither (bloom, blur off)", "meanSteps": 0.56, "worstSteps": 16.5, "pixelsOver2StepsPct": 9.77, "flatOutlierPct": 0, "flatRmseSteps": 0.79, "edgeMeanSteps": 0.56, "coverageDeltaPct": 0.27 },
+    { "toggles": "+ TAA + bloom (dither, blur off)", "meanSteps": 0.40, "worstSteps": 16.0, "pixelsOver2StepsPct": 1.26, "flatOutlierPct": 0, "flatRmseSteps": 0.42, "edgeMeanSteps": 0.94, "coverageDeltaPct": -0.92 },
+    { "toggles": "full production chain", "meanSteps": 0.69, "worstSteps": 15.9, "pixelsOver2StepsPct": 11.51, "flatOutlierPct": 0.001, "flatRmseSteps": 0.85, "edgeMeanSteps": 0.72, "coverageDeltaPct": -1.05 }
+  ],
+  "taaSweepTaaOnly": [
+    { "frames": 1, "meanSteps": 0.41, "worstSteps": 43.8, "pixelsOver2StepsPct": 1.06, "flatOutlierPct": 0, "flatRmseSteps": 0.39 },
+    { "frames": 4, "meanSteps": 0.41, "worstSteps": 28.1, "pixelsOver2StepsPct": 0.96, "flatOutlierPct": 0, "flatRmseSteps": 0.39 },
+    { "frames": 16, "meanSteps": 0.41, "worstSteps": 15.8, "pixelsOver2StepsPct": 0.84, "flatOutlierPct": 0, "flatRmseSteps": 0.39 },
+    { "frames": 48, "meanSteps": 0.41, "worstSteps": 15.8, "pixelsOver2StepsPct": 0.83, "flatOutlierPct": 0, "flatRmseSteps": 0.39 }
+  ],
+  "motionAndSizeCases": [
+    { "pose": "rotation", "resolution": "900x600", "frames": 24, "meanSteps": 0.62, "worstSteps": 41.1, "flatOutlierPct": 0.67, "flatRmseSteps": 1.08, "coverageDeltaPct": 0.0 },
+    { "pose": "clips", "resolution": "900x600", "frames": 24, "meanSteps": 0.70, "worstSteps": 80.7, "flatOutlierPct": 0.001, "flatRmseSteps": 0.85, "coverageDeltaPct": -1.03 },
+    { "pose": "rotation", "resolution": "901x601", "frames": 12, "meanSteps": 0.98, "worstSteps": 77.8, "flatOutlierPct": 0.30, "flatRmseSteps": 1.08, "coverageDeltaPct": 0.01 },
+    { "pose": "still", "resolution": "37x25", "frames": 12, "meanSteps": 1.06, "worstSteps": 20.7, "flatOutlierPct": 0, "flatRmseSteps": 1.09, "coverageDeltaPct": 1.30 },
+    { "pose": "still", "resolution": "500x750", "frames": 16, "meanSteps": 1.06, "worstSteps": 16.5, "flatOutlierPct": 0.041, "flatRmseSteps": 1.12, "coverageDeltaPct": -2.26 },
+    { "pose": "rotation", "condition": "taa-off", "resolution": "900x600", "frames": 16, "meanSteps": 0.65, "worstSteps": 238.1, "flatOutlierPct": 0.948, "flatRmseSteps": 1.02, "coverageDeltaPct": 0.0 },
+    { "pose": "rotation", "condition": "motion-blur-off", "resolution": "900x600", "frames": 16, "meanSteps": 0.75, "worstSteps": 195.3, "flatOutlierPct": 1.505, "flatRmseSteps": 1.11, "coverageDeltaPct": -0.05 },
+    { "pose": "rotation", "condition": "reinhard", "resolution": "900x600", "frames": 16, "meanSteps": 0.77, "worstSteps": 131, "flatOutlierPct": 0.182, "flatRmseSteps": 0.68, "coverageDeltaPct": -0.75 },
+    { "pose": "rotation", "condition": "msaa-off", "resolution": "900x600", "frames": 16, "meanSteps": 1.98, "worstSteps": 172.4, "flatOutlierPct": 5.634, "flatRmseSteps": 4.69, "coverageDeltaPct": -0.77,
+      "note": "not a like-for-like pair: in the WebGL reference, msaaSamples=0 also removes the resolve pass, so glass is never composited on the decoded colour. The frames are expected to differ. Not a quality regression in the native backend." }
+  ],
+  "notMeasured": [
+    "independent camera orbit (the driver's orbit pose was a no-op until this commit and is not yet re-measured)",
+    "near-plane crossing",
+    "mid-sequence resize and non-1 DPR in the parity matrix",
+    "SMAA on (the native SMAA shader failed to compile on device; reworked after this run and not yet re-measured)",
+    "real device loss",
+    "full-viewport (3360x1866) whole-pipeline comparison: creating a second high-resolution renderer froze the tab; see docs/webgpu-performance.md"
+  ]
+}

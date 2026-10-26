@@ -1,38 +1,42 @@
 # Native WebGPU: measured parity and performance
 
-All numbers below were produced on this machine (MacBook Air M1, Chrome, native WebGPU/Metal adapter) from the
-integrated pipeline at commit `7b8abf6`, at 900×600 with pixel ratio 1 unless stated otherwise, with the production
-settings (4× MSAA, TAA modern preset, motion blur, 8-level bloom, GT7 grade, dithering, SMAA off, walking clamp off,
-specular AA on). The WebGL reference was the unmodified pipeline running in the same page on a second, hidden canvas,
-with the same model, environment, camera and pose.
+All numbers were produced on this machine (MacBook Air M1, 7-core GPU, Chrome, native WebGPU/Metal adapter), with the
+production settings (4× MSAA, TAA modern preset, motion blur, 8-level bloom, GT7 grade, dithering, SMAA off, grazing
+clamp off, specular AA on), **one measured condition per fresh session**. The machine-readable form of every row is in
+[`tests/fixtures/webgpu-parity-m1.json`](../tests/fixtures/webgpu-parity-m1.json).
 
-Method: pause both production loops, reset both temporal histories, render 48 identical still frames on each backend
-back to back, drain the GPU (WebGL `fenceSync` polling, WebGPU `queue.onSubmittedWorkDone()`), then read the presented
-frame from each backend through **one** normalisation: WebGL `readPixels` sRGB codes decoded to display-linear light,
-native `rgba16float` display-linear values used as is. Every statistic is computed in that single declared domain and
-reported in sRGB code steps (0…255) so it is comparable to what a viewer can see.
+## What the statistic is, and what it is not
 
-Each condition was measured in its **own fresh session** (fresh reference manager, fresh histories). Sequentially
-toggling several conditions in one session contaminates later results; that is a property of the measurement driver,
-not of the renderer, and the driver now documents it.
+The comparison reads both presented frames — the WebGL reference canvas through `readPixels` (sRGB codes), the native
+`rgba16float` display-linear target through the sRGB transfer function — and reports differences in **sRGB code steps
+(0…255)**. Code space is used deliberately: it is the domain in which a step is perceptible, and it makes the dither
+phase difference visible as what it is, a one-step per-pixel difference.
 
-## Final-image parity, still frames after 48 frames
+This is **not** the statistic the validation harness gates on. `tests/webgpu-validation-utils.js` gates in
+display-linear light with `DISPLAY_TOLERANCE` (whole-frame visible fraction ≤ 6%) and `STILL_TOLERANCE` (≤ 0.2%). The
+rows below **do not satisfy those gates** — the full chain reports 11.5% of pixels differing by more than 2 code steps,
+essentially all of them dither phase and the last bloom-halo step. Anyone claiming "parity within the frozen
+tolerances" for this port is quoting the wrong column; the honest statement is the per-statistic one in these tables,
+and the harness gate still needs either a dither-off condition or a block-averaged visible-fraction statistic before it
+can certify the production chain.
 
-| Condition | Mean steps | Worst pixel | Pixels > 2 steps | Flat outlier channels | Flat RMSE | Edge mean | Coverage delta |
+## Final image parity, still frames after 48 frames, 900×600
+
+| Toggles | Mean | Worst | Pixels > 2 steps | Flat outliers | Flat RMSE | Edge mean | Coverage Δ |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Geometry + GT7 (no TAA/blur/bloom/dither) | 0.40 | 56 | 0.53% | 0 | 0.39 | 0.56 | +0.20% |
+| geometry + glass + GT7 only | 0.40 | 56 | 0.53% | 0 | 0.39 | 0.56 | +0.20% |
 | + TAA | 0.41 | 15.8 | 0.83% | 0 | 0.39 | 0.64 | +0.25% |
-| + dithering | 0.56 | 16.5 | 9.77% | 0 | 0.79 | 0.56 | +0.27% |
-| + bloom | 0.40 | 16.0 | 1.26% | 0 | 0.42 | 0.94 | −0.92% |
-| Full chain | 0.69 | 15.9 | 11.5% | 0.001% | 0.85 | 0.72 | −1.05% |
+| + TAA + dither | 0.56 | 16.5 | 9.77% | 0 | 0.79 | 0.56 | +0.27% |
+| + TAA + bloom | 0.40 | 16.0 | 1.26% | 0 | 0.42 | 0.94 | −0.92% |
+| full chain | 0.69 | 15.9 | 11.5% | 0.001% | 0.85 | 0.72 | −1.05% |
 
-Reading this: flat surfaces agree to well under one 8-bit step; the full chain's flat RMSE is 0.85 steps with 0.001% of
-flat channels beyond four steps. The "pixels > 2 steps" fraction comes almost entirely from dithering (its
-per-pixel noise phase differs between the backends, amplitude unchanged) and the bloom halo's last step; those pixels
-differ by one to two code steps and are not visible in the side-by-side comparison. Worst-case outliers are on thin
-high-contrast edges of the bright glass streak.
+The rows are **not cumulative**: each disables the named stages relative to the full chain, so "+ TAA + bloom" still has
+dithering off. Flat surfaces agree to well under one code step (flat RMSE 0.85 for the full chain, 0.001% of flat
+channels beyond four steps). The large "pixels > 2 steps" figure is dominated by dithering's per-pixel noise phase —
+adding dither alone moves the row from 0.83% to 9.77% while flat outliers stay at zero and flat RMSE stays under one
+step. Worst-case outliers sit on the thin high-contrast edge of the glass streak.
 
-TAA convergence sweep (TAA + GT7 only), still frames, same measurement:
+## TAA over time (TAA + GT7 only)
 
 | Frames | Mean | Worst | Pixels > 2 steps | Flat outliers | Flat RMSE |
 |---:|---:|---:|---:|---:|---:|
@@ -41,49 +45,49 @@ TAA convergence sweep (TAA + GT7 only), still frames, same measurement:
 | 16 | 0.41 | 15.8 | 0.84% | 0 | 0.39 |
 | 48 | 0.41 | 15.8 | 0.83% | 0 | 0.39 |
 
-The history converges to the same steady image: the transient edge difference shrinks with accumulated samples instead
-of drifting, which is the expected behaviour of two implementations of the same temporal filter with different jitter
-phase and sample rounding.
+The transient edge difference shrinks from 43.8 to 15.8 worst-case steps between 1 and 16 frames and then **plateaus**:
+a residual of 0.83% of pixels, ~16 steps worst case, persists at 48 frames. This is cross-backend agreement over time,
+not a per-backend convergence proof, and it is not claimed to vanish. The harness has a real per-backend convergence
+check (`convergenceStats`); its result is not yet recorded here.
 
-> **Note (superseded):** the throughput table below was measured before the two full-resolution pass cuts
-> (fused decode+depth export, direct-to-canvas tone mapping). See `docs/webgpu-performance.md` for the current
-> state, the single-renderer measurement protocol, and the fact that a full-viewport (3360×1866) whole-pipeline
-> comparison is not measured.
+## Motion, size and preset cases
+
+| Case | Mean | Worst | Flat outliers | Flat RMSE | Coverage Δ |
+|---|---:|---:|---:|---:|---:|
+| rotation, 900×600, 24 frames | 0.62 | 41.1 | 0.67% | 1.08 | 0.00% |
+| independent clips, 900×600, 24 frames | 0.70 | 80.7 | 0.001% | 0.85 | −1.03% |
+| odd 901×601, rotation | 0.98 | 77.8 | 0.30% | 1.08 | +0.01% |
+| tiny 37×25 | 1.06 | 20.7 | 0 | 1.09 | +1.30% |
+| portrait 500×750 | 1.06 | 16.5 | 0.041% | 1.12 | −2.26% |
+| TAA off, rotation | 0.65 | 238 | 0.948% | 1.02 | 0.00% |
+| motion blur off, rotation | 0.75 | 195 | 1.505% | 1.11 | −0.05% |
+| Reinhard preset, rotation | 0.77 | 131 | 0.182% | 0.68 | −0.75% |
+| MSAA off, rotation | 1.98 | 172 | 5.634% | 4.69 | −0.77% |
+
+MSAA off is **not a like-for-like pair**: in the WebGL reference `msaaSamples = 0` also removes the resolve pass, so
+the glass is never composited on the decoded colour. The two frames are expected to differ; this is a reference-path
+quirk, not a native regression. Widest outliers in the other rows are on thin bright edges (MSAA and TAA shape them
+differently) and are one to a few pixels per case.
 
 ## Performance
 
-Exclusive protocol: the production loops are paused and verified quiescent, the queue is drained, both backends run
-`warmupFrames` warm-up frames, then `samples` isolated samples per round over three rounds with alternating backend
-order, and a 30-frame sustained batch. No other GPU work ran during the measurement. Sustained throughput is the
-comparable metric; isolated WebGPU timestamps are reported but not used for any claim, because
-`resolveTimestampsAsync()` behind a per-sample queue drain measures drain-and-submit latency rather than the GPU
-duration of a frame (61.9 ms "isolated" against 5.5 ms sustained at 1800×1200 is internally contradictory, and the
-measurement is rejected rather than quoted).
+See [`docs/webgpu-performance.md`](webgpu-performance.md) for the protocol and the current numbers. Summary of what is
+and is not measured:
 
-| Resolution | Backend | Sustained ms/frame | Sustained fps | Isolated GPU median (not comparable) |
-|---|---:|---:|---:|---:|
-| 900×600 | WebGL reference | 3.25 | 308 | 4.79 ms |
-| 900×600 | Native WebGPU | 1.88 | 532 | 6.49 ms |
-| 1800×1200 (900×600 @2) | WebGL reference | 10.66 | 94 | 18.94 ms |
-| 1800×1200 (900×600 @2) | Native WebGPU | 5.47 | 183 | 61.87 ms |
+* Whole-pipeline sustained throughput at 900×600 and 1800×1200: native 1.73× and 1.95× the reference (dual-renderer
+  sessions, stable). Round spread was not published and must be before this is quoted as a headline.
+* 1920×1080, native only: 3.93 ms/frame (254 fps throughput) after the two full-resolution pass cuts; the
+  geometry+glass+GT7 baseline is 2.16 ms.
+* **Full-viewport 3360×1866 whole-pipeline comparison is not measured.** A dual-renderer run at that size froze the
+  tab repeatedly; the isolated geometry-stage probe (13.67 ms WebGL vs 0.92–2.88 ms native) is not a whole-viewer
+  number and is not quoted as one.
+* Isolated per-frame WebGPU timestamps from the harness are **not usable**: they disagree with sustained throughput by
+  ~11× (61.9 ms vs 5.5 ms at 1800×1200). The cause is not established; the earlier explanation ("measures drain
+  latency") is wrong. Only sustained throughput is used, and the harness records no `gpuNotComparable` flag yet, so
+  anyone reading the raw JSON must ignore `gpu.medianMs` for WebGPU until that is fixed.
 
-Whole-pipeline sustained throughput improved by **1.73×** at 900×600 and **1.95×** at 1800×1200. This is the whole
-viewer pipeline, not the isolated geometry stage from `docs/webgpu-geometry-probe.md`, and it is a throughput
-measurement, not a claim about presented-frame latency or the auto-tuner's FPS decisions.
+## Not measured
 
-## Relative to the earlier geometry probe
-
-The probe measured the opaque geometry stage alone at 13.67 ms (WebGL) versus 2.03/0.92 ms (native). The full pipeline
-is dominated by the post chain at these sizes, which is why the end-to-end gain is ~1.7–2× rather than the stage ratio,
-and why improvements should be pursued in the post chain next (fewer passes, resolution-aware bloom).
-
-## What is not proven yet
-
-* Temporal sequences with motion (rotation, camera orbit, independently sliding clips) are implemented and exercised
-  manually, but the automated matrix for those cases is still failing on the driver side (see the validation lane
-  handoff); they are not claimed.
-* SMAA on/off, MSAA off, Reinhard preset, portrait/tiny/odd sizes and mid-sequence resize are implemented but not
-  measured in this report.
-* Device-loss handling is implemented (canvas replacement + WebGL fallback) and was exercised by forcing a native
-  initialization failure, not by a real GPU reset.
-* No mobile/other-GPU data.
+Camera orbit (the driver's orbit pose was a no-op and is not yet re-measured), near-plane crossing, mid-sequence resize,
+non-1 DPR in the parity matrix, SMAA on (its shader failed to compile on device, was reworked afterwards, and is not yet
+re-verified), real device loss, and the full-viewport whole-pipeline comparison above.

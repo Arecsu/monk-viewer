@@ -125,7 +125,14 @@ function toggle(referenceManager, native, ablation) {
     dither: native.pipeline.postColor.dithering, gt7: native.pipeline.postColor.gt7ToneMapping,
     reinhard: native.pipeline.postColor.reinhardToneMapping,
   };
-  const set = (key, value) => { if (ref[key]) ref[key].enabled = value; if (nat[key]) nat[key].enabled = value; };
+  const set = (key, value) => {
+    for (const [side, owner] of [['reference', ref], ['native', nat]]) {
+      if (!owner[key] || typeof owner[key] !== 'object') {
+        throw new Error(`ablation "${ablation}" needs ${side}.${key}; refusing to compare mismatched effect configurations`);
+      }
+      owner[key].enabled = value;
+    }
+  };
   const restore = () => {
     for (const key of ['taa', 'blur', 'bloom', 'dither', 'gt7']) { if (ref[key]) ref[key].enabled = true; if (nat[key]) nat[key].enabled = true; }
     if (ref.reinhard) ref.reinhard.enabled = false;
@@ -163,7 +170,7 @@ const waitFrames = (count) => new Promise((resolve) => {
   requestAnimationFrame(tick);
 });
 
-export async function measureParity({ resolution = [900, 600], frames = 48, ablations = ABLATIONS, poses = ['still'] } = {}) {
+export async function measureParity({ resolution = [900, 600], frames = 48, ablations = ['geometry+tone'], poses = ['still'] } = {}) {
   const native = window.mgr;
   native.pauseRendering();
   let reference;
@@ -180,7 +187,10 @@ export async function measureParity({ resolution = [900, 600], frames = 48, abla
     await waitFrames(2);
     for (const pose of poses) {
       for (const ablation of ablations) {
-        const restore = toggle(referenceManager, native, ablation);
+        if (ablations.length > 1) {
+      throw new Error('measureParity measures one ablation per session: sequential ablations leak renderer state and silently poison later rows');
+    }
+    const restore = toggle(referenceManager, native, ablation);
         for (let frame = 0; frame < frames; ++frame) {
           if (pose === 'rotation') {
             const angle = (frame / frames) * Math.PI * 0.5;
@@ -210,7 +220,7 @@ export async function measureParity({ resolution = [900, 600], frames = 48, abla
         });
         restore();
         referenceManager.taa.reset?.();
-        native.taa.reset?.();
+        native.resetHistory?.() ?? native.taa.reset?.();
       }
     }
     return { resolution, frames, results };
@@ -263,6 +273,7 @@ export async function saveParityImages({ resolution = [900, 600], frames = 48 } 
     document.body.appendChild(canvas);
     return { painted: true, width: a.width, height: a.height };
   } finally {
+    restoreNative();
     reference?.manager.dispose();
     native.resumeRendering();
   }
@@ -440,8 +451,14 @@ export async function measureCase({ pose = 'still', resolution = [900, 600], fra
         }
       }
       if (pose === 'orbit' || pose === 'both') {
+        // Drive the camera directly: the paused production loop is what normally integrates OrbitControls goals.
+        const orbit = (frame / frames) * 0.5;
         for (const manager of [referenceManager, native]) {
-          manager.controls._goalSpherical.theta = (frame / frames) * 0.5;
+          const camera = manager.camera;
+          const radius = camera.position.length();
+          camera.position.set(Math.sin(orbit) * radius, camera.position.y, Math.cos(orbit) * radius);
+          camera.lookAt(0, 0, 0);
+          camera.updateMatrixWorld(true);
         }
       }
       if (pose === 'clips') {

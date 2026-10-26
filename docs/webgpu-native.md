@@ -62,12 +62,16 @@ prefixes — is preserved.
 
 ```bash
 pnpm install
-pnpm dev                      # then open /monk-viewer/aa-lab.html?backend=webgpu&fixed=1&smaa=0
+pnpm dev                      # then open /monk-viewer/aa-lab.html?backend=webgpu&fixed=1&smaa=0&clamp=0
 pnpm test                     # 126 node tests
 pnpm build
 ```
 
 Browser gates (supervisor-run, from the page console, exclusively; no other GPU work):
+
+The parity/benchmark drivers create a second renderer in the page. That is stable at 900×600 and 1800×1200 but froze the
+tab at ≥1280×720 on this machine, so benchmark one backend per tab (`tests/webgpu-perf-browser.js::benchmarkCurrent`)
+for larger sizes, and never count a run that froze.
 
 ```js
 // storage/UV helpers, TAA constant-HDR, blur, environment (native device, no viewer required)
@@ -80,9 +84,10 @@ await lifecycle.validateElementLifecycle({ modelUrl, envmapUrl, backend: 'webgpu
 
 // WebGL-vs-native parity and exclusive timings (open the lab with ?backend=webgpu)
 const parity = await import('/monk-viewer/tests/webgpu-parity-browser.js');
-await parity.measureParity({ ablations: ['geometry+tone'] });   // one ablation per call: clean state each time
-await parity.sweepTaa({});
-await parity.benchmark({ resolution: [900, 600], rounds: 3 });
+// one ablation per session; the driver now refuses more than one per call
+await parity.measureParity({ ablations: ['geometry+tone'] });
+await parity.sweepTaa({ checkpoints: [1, 4, 16, 48] });
+await parity.benchmark({ resolution: [900, 600], rounds: 3 });   // small sizes only in a shared tab
 ```
 
 Measured parity and timings, with method and caveats: `docs/webgpu-parity.md` and `docs/webgpu-performance.md`.
@@ -104,6 +109,13 @@ Measured parity and timings, with method and caveats: `docs/webgpu-parity.md` an
 
 ## Acceptance criteria for flipping `auto`
 
-Final-image parity within the frozen tolerances for still, rotation, orbit, independent clips, odd/tiny/portrait sizes,
-resize, and every preset/toggle (see the parity report); worker/main-thread/fallback lifecycle gates green; sustained
-throughput not worse than the reference on this machine; and fresh independent review with no open blockers.
+Not met yet. Required before flipping `WEBGPU_ACCEPTED`:
+
+1. The harness gate must be made able to certify the production chain: either a dither-off condition or a
+   block-averaged visible-fraction statistic, because the documented parity numbers (code space) exceed the current
+   display-linear `STILL_TOLERANCE`/`DISPLAY_TOLERANCE` almost entirely through dither phase.
+2. Re-measure and record: camera orbit, near-plane crossing, mid-sequence resize, non-1 DPR, SMAA on, MSAA off, a real
+   device-loss run, and the full-viewport (3360×1866) whole-pipeline comparison with a single-renderer benchmark.
+3. Publish benchmark round spread (the harness already computes it) and mark the WebGPU isolated timestamps as
+   non-comparable in the artifact rather than only in prose.
+4. Independent review with no open blockers.

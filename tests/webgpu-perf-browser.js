@@ -16,12 +16,20 @@ const drainNative = async (manager) => {
   }
 };
 
-function drainWebGl(manager) {
+function drainWebGl(manager, timeoutMs = 15000) {
   const gl = manager.renderer.getContext();
   const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
   gl.flush();
-  while (gl.clientWaitSync(sync, 0, 0) === gl.TIMEOUT_EXPIRED) { /* spin, like the probe */ }
-  gl.deleteSync(sync);
+  const start = performance.now();
+  try {
+    for (;;) {
+      if (gl.clientWaitSync(sync, 0, 0) !== gl.TIMEOUT_EXPIRED) return;
+      if (gl.isContextLost()) throw new Error('WebGL context lost while draining; refusing to report a timing');
+      if (performance.now() - start > timeoutMs) throw new Error(`WebGL fence did not signal within ${timeoutMs} ms`);
+    }
+  } finally {
+    gl.deleteSync(sync);
+  }
 }
 
 async function timeBatch(manager, backend, frames, render) {
