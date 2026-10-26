@@ -114,6 +114,33 @@ function close(actual: number, expected: number, message?: string) {
     assert.ok(Math.abs(actual - expected) <= 1e-6, `${message ?? "value"}: expected ${expected}, got ${actual}`);
 }
 
+type GraphNode = {
+    isNode?: boolean;
+    isVarNode?: boolean;
+    node?: GraphNode;
+    type?: string;
+    op?: string;
+    aNode?: GraphNode;
+    bNode?: GraphNode;
+    cNode?: GraphNode;
+    isUniformNode?: boolean;
+};
+
+/** TSL wraps intermediate values in VarNodes; the tests care about the expression inside them. */
+function unwrapNode(node?: GraphNode) {
+    let current = node;
+    while (current && current.isVarNode === true && current.node) current = current.node;
+    return current;
+}
+
+function collectNodes(node: GraphNode | undefined, visit: (node: GraphNode) => void, seen = new Set<GraphNode>()) {
+    const current = unwrapNode(node);
+    if (!current || typeof current !== "object" || seen.has(current)) return;
+    seen.add(current);
+    visit(current);
+    for (const child of [current.aNode, current.bNode, current.cNode, current.node]) collectNodes(child, visit, seen);
+}
+
 test("encoding names map to the reference curve indices", () => {
     assert.deepEqual(ENCODINGS, ["linear", "rgb", "max"]);
     assert.equal(encodingIndex("linear"), 0);
@@ -485,21 +512,139 @@ test("exposure, encoding, samples and the AA settings stay mutable at runtime", 
     const scaled = geometry.grazingClamp.factor(T.vec3(0.5, 0.5, 0.5));
     assert.notEqual(scaled, null);
 
-    // Samples are 4x or off on the native backend, and a change reallocates the attachments.
+    // The logical MSAA level stays 0 or 4 like the reference's msaaSamples: the auto-tuner decides by
+    // testing `samples > 0`, so a disabled stage must report 0 and not silently become 1.
     const before = geometry.target;
     assert.equal(geometry.samples, 4);
     geometry.samples = 4;
     assert.equal(geometry.target, before, "the same sample count keeps the target");
     geometry.samples = 0;
-    assert.equal(geometry.samples, 1);
+    assert.equal(geometry.samples, 0);
+    assert.equal(geometry.samples > 0, false, "a samples > 0 auto-tuner check must stay false");
     assert.notEqual(geometry.target, before);
-    assert.equal(geometry.target.samples, 1);
+    assert.equal(geometry.target.samples, 0, "logical 0 on the target: the native attachment becomes single-sampled");
     assert.equal(geometry.target.storeMultisampledDepthBuffer, true);
+    const disabled = geometry.target;
+    geometry.samples = 0;
+    assert.equal(geometry.target, disabled, "re-applying 0 is a no-op, so a tuner loop terminates");
+    geometry.samples = 1;
+    assert.equal(geometry.target, disabled, "every level below 4 is the same disabled level");
     geometry.samples = 4;
     assert.equal(geometry.samples, 4);
     assert.equal(geometry.target.samples, 4);
 
     // Sanity: a render still works after the mutability round trip.
     geometry.render({ projection: camera.projectionMatrix });
+    geometry.dispose();
+});
+
+test("the clamp weight is grazing * strength, the reference curve, without squaring", () => {
+    const { geometry } = createStage();
+
+    // mix(1, scale, weight): MathNode 'mix' with (x, y, a) on aNode, bNode, cNode.
+    const factor = unwrapNode(geometry.grazingClamp.factor(T.vec3(0.4, 0.4, 0.4)));
+    assert.equal(factor.type, "MathNode");
+
+    const weight = unwrapNode(factor.cNode);
+    assert.equal(weight.type, "OperatorNode");
+    assert.equal(weight.op, "*", "the blend weight is a single multiply");
+
+    // GrazingSpecularClamp.ts: mix(1.0, scale, grazing * grazingSpecularStrength) — no second grazing factor.
+    const grazingTerm = unwrapNode(weight.aNode);
+    assert.equal(grazingTerm.type, "OperatorNode");
+    assert.equal(grazingTerm.op, "-", "grazing = 1 - smoothstep(0, angle, |dot(faceNormal, viewDir)|)");
+    assert.equal(unwrapNode(weight.bNode).isUniformNode, true, "the strength uniform multiplies the grazing term");
+
+    const multiplications: GraphNode[] = [];
+    const uniforms: GraphNode[] = [];
+    collectNodes(weight, (node) => {
+        if (node.type === "OperatorNode" && node.op === "*") multiplications.push(node);
+        if (node.isUniformNode === true) uniforms.push(node);
+    });
+    assert.equal(multiplications.length, 1, "one multiply (grazing * strength): the reference does not square the grazing term");
+    assert.ok(uniforms.length >= 1, "the weight still carries the strength uniform");
+
+    geometry.dispose();
+});
+
+test("the clamp scales the base outgoing light before clearcoat and sheen are composed", () => {
+    const { geometry, model } = createStage();
+    const material = model.artworkMesh.material as GPU.MeshPhysicalNodeMaterial;
+    assert.equal(material.isMeshPhysicalNodeMaterial, true);
+
+    const calls: string[] = [];
+    const clampPrototype = Object.getPrototypeOf(geometry.grazingClamp) as { apply: (...args: unknown[]) => void };
+    const physicalPrototype = GPU.PhysicalLightingModel.prototype as { finish: (...args: unknown[]) => void };
+    const originalApply = clampPrototype.apply;
+    const originalFinish = physicalPrototype.finish;
+
+    try {
+        // The patched model binds finish at setup time, so the spy has to be in place first.
+        clampPrototype.apply = function () { calls.push("clamp"); };
+        physicalPrototype.finish = function () { calls.push("finish"); };
+
+        const lightingModel = material.setupLightingModel();
+        assert.notEqual(lightingModel.finish, originalFinish, "the converted material wraps the physical model's finish");
+        lightingModel.finish({ context: {} });
+    } finally {
+        clampPrototype.apply = originalApply;
+        physicalPrototype.finish = originalFinish;
+    }
+
+    // PhysicalLightingModel.finish composes clearcoat/sheen on outgoingLight, so the clamp has to land before it.
+    assert.deepEqual(calls, ["clamp", "finish"]);
+    geometry.dispose();
+});
+
+test("setSize and sample changes restart the motion history", () => {
+    const { geometry, camera, model } = createStage();
+    const projection = camera.projectionMatrix.clone();
+    const mesh = model.artworkMesh;
+
+    geometry.render({ projection });
+    mesh.position.x += 0.1;
+    mesh.updateMatrixWorld(true);
+    assert.equal(geometry.render({ projection }).meshesMoved, true);
+
+    geometry.setSize(120, 80);
+    assert.equal(geometry.meshesMoved, false, "a resize drops the previous frame");
+    assert.equal(geometry.render({ projection }).meshesMoved, false, "the first frame after a resize reports no motion");
+    assert.deepEqual([...geometry.previousViewProjection.elements], [...geometry.viewProjection.elements]);
+
+    mesh.position.x += 0.1;
+    mesh.updateMatrixWorld(true);
+    assert.equal(geometry.render({ projection }).meshesMoved, true);
+
+    geometry.samples = 0;
+    assert.equal(geometry.meshesMoved, false, "a sample change drops the previous frame");
+    assert.equal(geometry.render({ projection }).meshesMoved, false, "the first frame after a sample change reports no motion");
+    const record = geometry.meshes[0];
+    assert.deepEqual([...record.previousModel.value.elements], [...record.currentModel.value.elements]);
+
+    geometry.dispose();
+});
+
+test("the live meshesMoved getter sees glass drawn after the geometry pass", () => {
+    const { geometry, renderer, scene, camera, model } = createStage();
+    const projection = camera.projectionMatrix.clone();
+
+    const frame = geometry.render({ projection });
+    assert.equal(frame.meshesMoved, false);
+    assert.equal(geometry.meshesMoved, false);
+
+    // The transparency stage draws GLASS_LAYER after the geometry result has been handed over.
+    model.glassMesh.position.x += 0.15;
+    model.glassMesh.updateMatrixWorld(true);
+    const previousLayers = camera.layers.mask;
+    camera.layers.set(GLASS_LAYER);
+    try {
+        renderer.render(scene, camera);
+    } finally {
+        camera.layers.mask = previousLayers;
+    }
+
+    assert.equal(geometry.meshesMoved, true, "a glass pane that moved on its own is visible after the transparency draw");
+    assert.equal(frame.meshesMoved, false, "the value returned with the geometry result is a snapshot of that pass");
+
     geometry.dispose();
 });

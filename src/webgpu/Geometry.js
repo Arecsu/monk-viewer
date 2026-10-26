@@ -90,11 +90,11 @@ export function velocityForVertex(position, { currentViewProjection, currentMode
 }
 
 /**
- * The GPU sample count three supports on its WebGPU backend: either 4x or none. The reference can request
- * other counts, the native attachments cannot.
+ * The logical MSAA level. The reference viewer keeps `msaaSamples` at 4 or 0, and its auto-tuner decides by
+ * testing `samples > 0`; the native backend renders 1x or 4x, so a request below 4 disables MSAA and stays 0.
  */
 function normalizeSamples(samples) {
-  return samples >= MAX_SAMPLES ? MAX_SAMPLES : 1;
+  return samples >= MAX_SAMPLES ? MAX_SAMPLES : 0;
 }
 
 /**
@@ -212,13 +212,17 @@ class GrazingSpecularClamp {
     const compressed = luminance.sub(excess).add(excess.div(excess.div(this._limit).add(1)));
     const scale = T.select(luminance.greaterThan(0), compressed.div(luminance), T.float(1));
 
-    return T.mix(T.float(1), scale, grazing.mul(grazing).mul(this._strength));
+    return T.mix(T.float(1), scale, grazing.mul(this._strength));
   }
 
   /**
-   * Applies the clamp to a lighting model's accumulated indirect specular. The reference scales
-   * `reflectedLight.indirectSpecular` after `lights_fragment_end`; the node lighting model has already
-   * folded the indirect specular into the outgoing light by then, so the same scale arrives as a delta.
+   * Applies the clamp to a lighting model's base outgoing light, before the physical model composes
+   * clearcoat and sheen on top of it.
+   *
+   * The reference scales `reflectedLight.indirectSpecular` right after `lights_fragment_end`, i.e. before
+   * `totalSpecular` and the clearcoat/sheen composition. The node lighting model has already folded the base
+   * indirect specular into `outgoingLight` by the time `finish()` can be patched, so the same scale arrives
+   * as a delta on that base value, and it has to be added before `finish()` composes the layers.
    *
    * @param {Object} context - The lighting context of the current build.
    */
@@ -272,8 +276,10 @@ function createMaterialClasses(specularAA, grazingClamp) {
       const model = super.setupLightingModel();
       const finish = model.finish.bind(model);
       model.finish = (builder) => {
-        finish(builder);
+        // The clamp scales the base outgoing light first: the physical model's finish then composes
+        // clearcoat and sheen on the clamped value, exactly like the reference clamp before that composition.
         grazingClamp.apply(builder.context);
+        finish(builder);
       };
       return model;
     }
@@ -331,7 +337,8 @@ export class WebGpuGeometry {
    * @param {Object} [options] - The stage options.
    * @param {GPU.Scene} [options.scene] - The scene to render.
    * @param {GPU.Camera} [options.camera] - The camera to render with; its layers are set to OPAQUE_LAYER for the draw.
-   * @param {number} [options.samples=4] - The requested MSAA level. The native backend supports 1 or 4, so values are clamped.
+   * @param {number} [options.samples=4] - The logical MSAA level: 4 for 4x MSAA, 0 to disable it. Requests below
+   *   4 disable MSAA, because the native backend only renders 1x or 4x.
    * @param {number} [options.exposure=1.6] - The encoding exposure shared with the decode stage.
    * @param {string} [options.encoding='rgb'] - The MSAA curve, one of {@link ENCODINGS}.
    * @param {Object} [options.specularAA] - Specular antialiasing settings: `{enabled, variance, threshold}`.
@@ -387,7 +394,10 @@ export class WebGpuGeometry {
     return this._target;
   }
 
-  /** The actual MSAA level of the attachments: 1 or {@link MAX_SAMPLES}. */
+  /**
+   * The logical MSAA level: 4 with MSAA, 0 when disabled. With 0 the multitarget is single-sampled
+   * (`target.samples === 0`, like the reference's `msaaSamples`), which is what the auto-tuner tests.
+   */
   get samples() {
     return this._samples;
   }
@@ -425,6 +435,15 @@ export class WebGpuGeometry {
   /** The previous frame's view-projection, which the velocity shader subtracts. */
   get previousViewProjection() {
     return this._previousViewProjection.value;
+  }
+
+  /**
+   * Whether a mesh moved independently of the camera in the current frame. `render()` also returns the value
+   * as it stood after the geometry draw; this getter stays live, so a pipeline can read it after the
+   * transparency pass and see a glass pane that moved on its own as well.
+   */
+  get meshesMoved() {
+    return this._moved;
   }
 
   /**
@@ -492,7 +511,8 @@ export class WebGpuGeometry {
    *   the velocity; the draw itself uses the camera's own projection through the renderer's coordinate system.
    * @return {{color: GPU.Texture, velocity: GPU.Texture, depth: GPU.Texture, target: GPU.RenderTarget, meshesMoved: boolean}}
    *   The resolved encoded HDR color, the resolved velocity, the retained MSAA depth32float texture, the target
-   *   the outputs belong to, and whether any mesh moved independently of the camera.
+   *   the outputs belong to, and whether any mesh moved independently of the camera as of this draw (the live
+   *   value afterwards, glass included, is the {@link meshesMoved} getter).
    */
   render({ projection } = {}) {
     this._assertNotDisposed();
@@ -642,6 +662,9 @@ export class WebGpuGeometry {
   _reallocate() {
     this._target.dispose();
     this._target = createGeometryTarget(this._width, this._height, this._samples);
+    // A resize or a sample change invalidates the previous frame: the attachments and the motion history
+    // both restart, so the first frame in the new configuration reports no motion.
+    this.reset();
   }
 
   _convertMaterial(source, record) {
