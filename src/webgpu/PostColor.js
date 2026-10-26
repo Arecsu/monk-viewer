@@ -287,7 +287,7 @@ export class WebGpuPostColor {
 		this._upPasses = [];
 		this._upCount = 0;
 
-		this._luminanceSource = T.texture(this.outputTarget.texture);
+		this._luminanceSource = T.texture(this.outputTarget.texture, T.vec2(0, 0));
 		this._luminanceTexel = T.uniform(new GPU.Vector2(1, 1));
 		this._luminancePadding = T.vec2(BLOOM_DOWNSAMPLE_PADDING, BLOOM_DOWNSAMPLE_PADDING)
 			.mul(this._luminanceTexel);
@@ -299,15 +299,15 @@ export class WebGpuPostColor {
 			padding: this._luminancePadding
 		}), { target: this.luminanceTarget, name: 'BloomLuminance' });
 
-		this._compositeSource = T.texture(this.outputTarget.texture);
-		this._compositeBloom = T.texture(this.outputTarget.texture);
+		this._compositeSource = T.texture(this.outputTarget.texture, T.vec2(0, 0));
+		this._compositeBloom = T.texture(this.outputTarget.texture, T.vec2(0, 0));
 		this._compositePass = new FullscreenPass(renderer, createBloomCompositeNode({
 			input: this._compositeSource,
 			bloom: this._compositeBloom,
 			intensity: this.uBloomIntensity
 		}), { target: this.bloomCompositeTarget, name: 'BloomComposite' });
 
-		this._toneSource = T.texture(this.outputTarget.texture);
+		this._toneSource = T.texture(this.outputTarget.texture, T.vec2(0, 0));
 		this._tonePass = new FullscreenPass(renderer, createToneMappingNode({
 			source: this._toneSource,
 			resolution: this.uResolution,
@@ -372,7 +372,7 @@ export class WebGpuPostColor {
 		this._upPasses = [];
 
 		for(let i = 0; i < levels; ++i) {
-			const source = T.texture(this.outputTarget.texture);
+			const source = T.texture(this.outputTarget.texture, T.vec2(0, 0));
 			const sourceTexel = T.uniform(new GPU.Vector2(1, 1));
 			const padding = T.vec2(BLOOM_DOWNSAMPLE_PADDING, BLOOM_DOWNSAMPLE_PADDING).mul(sourceTexel);
 			const fragment = createDownsampleNode({
@@ -392,8 +392,8 @@ export class WebGpuPostColor {
 		}
 
 		for(let i = 0; i < upCount; ++i) {
-			const source = T.texture(this.outputTarget.texture);
-			const support = T.texture(this.outputTarget.texture);
+			const source = T.texture(this.outputTarget.texture, T.vec2(0, 0));
+			const support = T.texture(this.outputTarget.texture, T.vec2(0, 0));
 			const sourceTexel = T.uniform(new GPU.Vector2(1, 1));
 			const fragment = createUpsampleNode({
 				source, support, radius: this.uBloomRadius, sourceTexel

@@ -370,12 +370,12 @@ export class WebGpuSMAA {
 		this._blendPass?.dispose();
 
 		const settings = this._settings;
-		const searchTextureNode = T.texture(this.searchTexture);
-		const areaTextureNode = T.texture(this.areaTexture);
-		const edgeNode = T.texture(this.edgeTarget.texture);
-		const weightsNode = T.texture(this.weightsTarget.texture);
-		this._edgeSource = T.texture(this.edgeTarget.texture);
-		this._blendSource = T.texture(this.edgeTarget.texture);
+		const searchTextureNode = T.texture(this.searchTexture, V2(0, 0));
+		const areaTextureNode = T.texture(this.areaTexture, V2(0, 0));
+		const edgeNode = T.texture(this.edgeTarget.texture, V2(0, 0));
+		const weightsNode = T.texture(this.weightsTarget.texture, V2(0, 0));
+		this._edgeSource = T.texture(this.edgeTarget.texture, V2(0, 0));
+		this._blendSource = T.texture(this.edgeTarget.texture, V2(0, 0));
 
 		const edgeFragment = T.Fn(() => {
 
