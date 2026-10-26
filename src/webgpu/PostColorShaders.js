@@ -368,7 +368,7 @@ const vec3Dot = (value, row) => T.dot(value, V3(row[0], row[1], row[2]));
 
 /** Samples a logical UV and applies an integer texel offset in logical coordinates. */
 export const sampleLogicalOffset = (source, uv, x, y) =>
-	T.texture(source, V2(uv.x, F(1).sub(uv.y))).offset(T.ivec2(T.int(x), T.int(-y))).level(0);
+	T.texture(source, V2(uv.x, F(1).sub(uv.y))).offset(T.ivec2(T.int(x), T.int(-y))).level(F(0));
 
 export const srgbEncodeNode = (value) => T.mix(
 	value.mul(12.92),

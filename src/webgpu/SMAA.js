@@ -188,8 +188,33 @@ export function createSMAALookupTextures({ search, area }) {
 const F = (value) => T.float(value);
 const V2 = (x, y) => T.vec2(x, y);
 const V4 = (x, y, z, w) => T.vec4(x, y, z, w);
-// textureSampleLevel keeps SMAA's branch/loop sampling valid under WGSL uniform-control-flow rules.
-const sampleSMAA = (source, uv) => sampleLogical(source, uv).level(0);
+// Filtered SMAA lookups use textureSampleLevel with an explicit float LOD. This stays valid in branches/loops and
+// avoids three lowering a filterable sample to textureLoad.
+const sampleFilteredSMAA = (source, uv) => sampleLogical(source, uv).level(F(0));
+
+// Depth and search are unfilterable/nearest in WGSL, so they are explicit integer textureLoad operations. The level
+// argument is intentionally omitted: three builds levelNode as a float, which emits invalid u32(0.0); a null level
+// defaults to u32(0u).
+const sampleDepthSMAA = (source, uv) => {
+
+	const size = T.textureSize(source);
+	const width = T.float(size.x);
+	const height = T.float(size.y);
+	const x = T.int(T.clamp(T.floor(uv.x.mul(width)), 0, width.sub(1)));
+	const y = T.int(T.clamp(T.floor(F(1).sub(uv.y).mul(height)), 0, height.sub(1)));
+	return T.textureLoad(source, T.ivec2(x, y)).r;
+
+};
+
+const loadSearchTexture = (source, u, v) => {
+
+	const width = SMAA_CONSTANTS.SEARCHTEX_PACKED_WIDTH;
+	const height = SMAA_CONSTANTS.SEARCHTEX_PACKED_HEIGHT;
+	const x = T.int(T.clamp(T.floor(u.mul(width)), 0, width - 1));
+	const y = T.int(T.clamp(T.floor(v.mul(height)), 0, height - 1));
+	return T.textureLoad(source, T.ivec2(x, y));
+
+};
 
 const decodeDiagBilinearAccess = (e) => {
 
@@ -426,6 +451,12 @@ export class WebGpuSMAA {
 				if(search?.isTexture === true && area?.isTexture === true) {
 					searchTexture = search;
 					areaTexture = area;
+					// Reference sampler requirements. A nearest area texture would make three lower the filtered
+					// textureSampleLevel to textureLoad with a float LOD, which is invalid WGSL.
+					searchTexture.magFilter = searchTexture.minFilter = GPU.NearestFilter;
+					areaTexture.magFilter = areaTexture.minFilter = GPU.LinearFilter;
+					searchTexture.generateMipmaps = areaTexture.generateMipmaps = false;
+					searchTexture.flipY = areaTexture.flipY = false;
 				} else if(search !== undefined && area !== undefined) {
 					resources = createSMAALookupTextures({ search, area });
 					searchTexture = resources.searchTexture;
@@ -497,7 +528,7 @@ export class WebGpuSMAA {
 
 			const uv = logicalUV;
 			const texel = this.uTexel;
-			const sample = (dx, dy) => srgbEncodeNode(sampleSMAA(this._edgeSource,
+			const sample = (dx, dy) => srgbEncodeNode(sampleFilteredSMAA(this._edgeSource,
 				uv.add(texel.mul(V2(dx, dy)))).rgb);
 			const center = sample(0, 0);
 			const left = sample(-1, 0);
@@ -517,7 +548,7 @@ export class WebGpuSMAA {
 				// SMAAEdgeDetectionMaterial getOrthographicDepth + calculatePredicatedThreshold.
 				const depthAt = (sampleUV) => {
 
-					const depth = sampleSMAA(this._depthSource, sampleUV).r;
+					const depth = sampleDepthSMAA(this._depthSource, sampleUV);
 					// perspectiveDepthToViewZ then viewZToOrthographicDepth (packing.glsl.js, no reversed depth).
 					const viewZ = this.uCameraNear.mul(this.uCameraFar).div(
 						this.uCameraFar.sub(this.uCameraNear).mul(depth).sub(this.uCameraFar)
@@ -578,7 +609,7 @@ export class WebGpuSMAA {
 			const MAX_SEARCH_STEPS = settings.orthogonalSearchSteps;
 			const MAX_SEARCH_STEPS_DIAG = settings.diagonalSearchSteps;
 			const CORNER_ROUNDING_NORM = settings.cornerRounding / 100;
-			const EDGE = (value) => sampleSMAA(edgeNode, value);
+			const EDGE = (value) => sampleFilteredSMAA(edgeNode, value);
 			const EDGE_OFFSET = (value, x, y) => sampleLogicalOffset(edgeNode, value, x, y);
 
 			const searchLength = (e, offset) => {
@@ -591,9 +622,10 @@ export class WebGpuSMAA {
 					SMAA_CONSTANTS.SEARCHTEX_PACKED_WIDTH;
 				const biasY = (SMAA_CONSTANTS.SEARCHTEX_SIZE_Y - 0.5) /
 					SMAA_CONSTANTS.SEARCHTEX_PACKED_HEIGHT;
-				return T.texture(searchTextureNode, V2(
-					scaleX * e.x + biasX, scaleY * e.y + biasY
-				)).level(0).r;
+				return loadSearchTexture(searchTextureNode,
+					F(scaleX).mul(e.x).add(biasX),
+					F(scaleY).mul(e.y).add(biasY)
+				).r;
 
 			};
 
@@ -654,7 +686,7 @@ export class WebGpuSMAA {
 						.mul(pixelSizeY).add(0.5 * pixelSizeY)
 						.add(SMAA_CONSTANTS.AREATEX_SUBTEX_SIZE * offset)
 				);
-				return T.texture(areaTextureNode, texCoord).level(0).rg;
+				return T.texture(areaTextureNode, texCoord).level(F(0)).rg;
 
 			};
 
@@ -669,7 +701,7 @@ export class WebGpuSMAA {
 						.mul(pixelSizeY).add(0.5 * pixelSizeY)
 						.add(SMAA_CONSTANTS.AREATEX_SUBTEX_SIZE * offset)
 				);
-				return T.texture(areaTextureNode, texCoord).level(0).rg;
+				return T.texture(areaTextureNode, texCoord).level(F(0)).rg;
 
 			};
 
@@ -686,7 +718,9 @@ export class WebGpuSMAA {
 					const first = searchDiag1(texCoord, -1, 1);
 					dX.assign(first.x);
 					dZ.assign(first.y);
-					T.If(first.y.greaterThan(0.9), () => dX.addAssign(1));
+					T.If(first.y.greaterThan(0.9), () => {
+						dX.addAssign(1);
+					});
 
 				});
 				const second = searchDiag1(texCoord, 1, -1);
@@ -718,7 +752,9 @@ export class WebGpuSMAA {
 					const fourth = searchDiag2(texCoord, 1, 1);
 					dY.assign(fourth.x);
 					dW.assign(fourth.y);
-					T.If(fourth.y.greaterThan(0.9), () => dY.addAssign(1));
+					T.If(fourth.y.greaterThan(0.9), () => {
+						dY.addAssign(1);
+					});
 
 				}).Else(() => {
 
@@ -956,11 +992,11 @@ export class WebGpuSMAA {
 			const texel = this.uTexel;
 			const aX = sampleLogicalOffset(weightsNode, uv, 1, 0).a;
 			const aY = sampleLogicalOffset(weightsNode, uv, 0, 1).g;
-			const center = sampleSMAA(weightsNode, uv);
+			const center = sampleFilteredSMAA(weightsNode, uv);
 			const aZ = center.b;
 			const aW = center.r;
 			const a = V4(aX, aY, aZ, aW);
-			const inputColor = sampleSMAA(this._blendSource, uv);
+			const inputColor = sampleFilteredSMAA(this._blendSource, uv);
 			const color = inputColor.toVar();
 
 			T.If(T.dot(a, V4(1, 1, 1, 1)).greaterThanEqual(1e-5), () => {
@@ -979,8 +1015,8 @@ export class WebGpuSMAA {
 					texel.x, texel.y, texel.x.negate(), texel.y.negate()
 				)).add(V4(uv.x, uv.y, uv.x, uv.y));
 				color.assign(
-					sampleSMAA(this._blendSource, V2(coord.x, coord.y)).mul(weight.x)
-						.add(sampleSMAA(this._blendSource, V2(coord.z, coord.w)).mul(weight.y))
+					sampleFilteredSMAA(this._blendSource, V2(coord.x, coord.y)).mul(weight.x)
+						.add(sampleFilteredSMAA(this._blendSource, V2(coord.z, coord.w)).mul(weight.y))
 				);
 
 			});

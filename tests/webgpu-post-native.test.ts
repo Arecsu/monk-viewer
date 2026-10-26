@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { DataTexture } from 'three/webgpu';
+import { DataTexture, PerspectiveCamera, Scene, WGSLNodeBuilder } from 'three/webgpu';
 import { SMAAEdgeDetectionMaterial, SMAAWeightsMaterial } from 'postprocessing';
 import {
 	BLOOM_DOWNSAMPLE_PADDING,
@@ -45,6 +45,30 @@ const assertArrayClose = (actual: number[], expected: number[], epsilon = 1e-12)
 	assert.equal(actual.length, expected.length);
 	actual.forEach((value, i) => assert.ok(Math.abs(value - expected[i]) < epsilon, `${actual} vs ${expected}`));
 };
+
+function buildFragmentWGSL(pass: any): string {
+
+	const renderer = {
+		contextNode: { isContextNode: true, getFlowContextData: () => ({}) },
+		library: { fromMaterial: (material: any) => material },
+		backend: {
+			utils: { getTextureSampleData: () => ({ primarySamples: 1 }) },
+			capabilities: { getUniformBufferLimit: () => 65536 },
+			compatibilityMode: false
+		},
+		debug: { diagnostics: { keywords: false } },
+		getRenderTarget: () => null,
+		getMRT: () => null,
+		hasFeature: () => false,
+		hasCompatibility: () => false
+	};
+	const builder = new WGSLNodeBuilder({ material: pass.material, geometry: pass.quad.geometry }, renderer as any);
+	builder.camera = new PerspectiveCamera();
+	builder.scene = new Scene();
+	builder.build();
+	return builder.fragmentShader;
+
+}
 
 test('GT7 constants and curve still match Polyphony\'s reference', () => {
 	const constants = gt7Constants();
@@ -210,6 +234,42 @@ test('SMAA depth predication matches getOrthographicDepth and the reference thre
 		depth: 0.5, left: 0.4999, top: 0.5003, edgeThreshold: 0.01,
 		predicationScale: 3, predicationStrength: 0.5
 	}), [0.03, 0.015]);
+});
+
+test('SMAA weights and blend WGSL compile without NaN or float texture-load levels', async () => {
+	const search = new DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+	const area = new DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+	search.needsUpdate = true;
+	area.needsUpdate = true;
+	const smaa = new WebGpuSMAA({}, { width: 64, height: 64, lookup: { search, area } });
+	try {
+		assert.equal(await smaa.readyPromise, true);
+		const modules = {
+			weights: buildFragmentWGSL(smaa._weightsPass),
+			edge: buildFragmentWGSL(smaa._edgePass),
+			blend: buildFragmentWGSL(smaa._blendPass)
+		};
+		for(const [name, wgsl] of Object.entries(modules)) {
+			assert.ok(wgsl.length > 0, `${name} empty`);
+			assert.ok(!/NaN\./.test(wgsl), `${name} has NaN literal`);
+			assert.ok(!/u32\(\s*\d+\.\d+\s*\)/.test(wgsl), `${name} has u32(float)`);
+			assert.ok(!/textureLoad\([^\n]*u32\(\s*\d+\.\d+\s*\)/.test(wgsl),
+				`${name} has textureLoad with a float level`);
+			assert.ok(!/textureSample\(/.test(wgsl), `${name} has implicit-derivative textureSample`);
+		}
+		// Search is unfilterable/nearest: invalid textureLoad levels were the reported defect.
+		assert.ok(/textureLoad\([^\n]*u32\( 0u \)/.test(modules.weights),
+			'search loads use an integer/default level');
+		// Edge, weights and area remain filtered textureSampleLevel lookups.
+		assert.ok(modules.weights.includes('textureSampleLevel('));
+		assert.ok(modules.edge.includes('textureSampleLevel('));
+		assert.ok(modules.blend.includes('textureSampleLevel('));
+		assert.equal(modules.blend.includes('textureLoad'), false);
+	} finally {
+		smaa.dispose();
+		search.dispose();
+		area.dispose();
+	}
 });
 
 test('SMAA lookup assets exist and are reachable from the worker module', () => {
