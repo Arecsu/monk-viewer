@@ -3,116 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <title>AA lab</title>
-  <style>html,body{color:#ddd;background:#000;margin:0;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}body{overflow:hidden}canvas{width:100vw;height:100vh;display:block}body.fixed canvas{width:900px;height:600px}#panel{overscroll-behavior:contain;background:#0a0a0ce6;border:1px solid #2c2c31;border-radius:7px;width:272px;max-height:calc(100vh - 20px);padding:8px 10px 10px;position:fixed;top:10px;right:10px;overflow-y:auto;box-shadow:0 8px 30px #0009}#panel.hidden{display:none}#panel header{justify-content:space-between;align-items:center;margin-bottom:4px;display:flex}#panel h1{color:#6fd6b0;letter-spacing:.06em;margin:0;font-size:12px;font-weight:600}#panel h2{text-transform:uppercase;letter-spacing:.09em;color:#7c8794;border-bottom:1px solid #24262b;margin:10px 0 4px;padding-bottom:2px;font-size:10px}.row{align-items:center;gap:6px;margin:3px 0;display:flex}.row>label{color:#aab3bd;flex:0 0 104px}.row>input[type=range]{accent-color:#6fd6b0;flex:auto;min-width:0;height:14px}.row>output{text-align:right;color:#e8eef4;font-variant-numeric:tabular-nums;flex:0 0 40px}.toggles{flex-wrap:wrap;gap:4px;display:flex}.toggles button,.buttons button{font:inherit;cursor:pointer;color:#8b949e;background:#1a1c20;border:1px solid #2c2f35;border-radius:4px;padding:3px 7px;font-size:11px}.toggles button.on{color:#8ff0c9;background:#14392e;border-color:#2c6b56}.toggles button:disabled{opacity:.35;cursor:default}.buttons{gap:5px;margin-top:6px;display:flex}.buttons button:hover,.toggles button:hover{border-color:#4a515b}#state{color:#7f8a95;border-top:1px solid #24262b;margin-top:8px;padding-top:6px;line-height:1.5}#state b{color:#cfe3dc;font-weight:500}#copied{color:#6fd6b0}#show-panel{font:inherit;color:#8b949e;cursor:pointer;background:#1a1c20;border:1px solid #2c2f35;border-radius:4px;padding:3px 8px;font-size:11px;position:fixed;top:10px;right:10px}#show-panel.hidden{display:none}select{font:inherit;color:#cfd8e3;background:#1a1c20;border:1px solid #2c2f35;border-radius:4px;padding:2px 4px;font-size:11px}</style>
   <script type="module" crossorigin src="/monk-viewer/assets/aa-lab-1.2.3.js"></script>
+  <link rel="stylesheet" crossorigin href="/monk-viewer/assets/lab-panel-1.2.3.css">
 </head>
 <body>
   <canvas id="c"></canvas>
-  <button id="show-panel" class="hidden">controls</button>
-  <div id="panel">
-    <header>
-      <h1>TAA lab</h1>
-      <div class="toggles"><button id="hide-panel">hide</button></div>
-    </header>
-
-    <h2>Renderer</h2>
-    <div class="row"><label for="backend">backend</label><select id="backend">
-      <option value="auto">auto (WebGPU if available)</option><option value="webgl">WebGL reference</option><option value="webgpu">native WebGPU</option>
-    </select></div>
-    <div id="backend-status">initializing</div>
-
-    <h2>Motion</h2>
-    <div class="row">
-      <label for="motion-mode">motion</label>
-      <select id="motion-mode">
-        <option value="still">still</option>
-        <option value="model" selected>model</option>
-        <option value="camera">camera</option>
-        <option value="both">model + camera</option>
-        <option value="parts">parts (clips slide)</option>
-      </select>
-      <output id="motion-speed-out"></output>
-    </div>
-    <div class="row">
-      <label for="motion-speed">speed °/s</label>
-      <input id="motion-speed" type="range" min="0" max="180" step="1" value="45" />
-    </div>
-
-    <h2>Toggles</h2>
-    <div class="toggles" id="toggles"></div>
-
-    <h2>Modern TAA</h2>
-    <div class="row">
-      <label for="preset">preset</label>
-      <select id="preset">
-        <option value="modern">modern</option>
-        <option value="legacy">legacy (previous)</option>
-      </select>
-    </div>
-    <div class="toggles" id="modern-toggles"></div>
-    <div class="row">
-      <label for="box-mode">clamp box</label>
-      <select id="box-mode">
-        <option value="variance">mean ± Γσ</option>
-        <option value="minmax">min/max × Γ</option>
-        <option value="intersection">variance ∩ min/max</option>
-      </select>
-    </div>
-    <div class="row">
-      <label for="debug-view">debug view</label>
-      <select id="debug-view">
-        <option value="0">off</option>
-        <option value="1">locks (red)</option>
-        <option value="2">depth: trusted / disoccluded</option>
-        <option value="3">glass mask (blue)</option>
-        <option value="4">motion (red x, green y) + blend (blue)</option>
-      </select>
-    </div>
-    <div id="modern"></div>
-
-    <h2>Motion blur</h2>
-    <div id="blur"></div>
-
-    <h2>Specular AA</h2>
-    <div id="specular"></div>
-
-    <h2>Tone mapping</h2>
-    <div class="toggles" id="tonemapping-toggles"></div>
-    <div id="tonemapping"></div>
-
-    <h2>Edge resolve</h2>
-    <div class="row">
-      <label for="resolve-encoding">MSAA curve</label>
-      <select id="resolve-encoding">
-        <option value="rgb">per channel</option>
-        <option value="max">max channel (keeps hue)</option>
-        <option value="linear">off (plain MSAA)</option>
-      </select>
-    </div>
-    <div id="resolve"></div>
-
-    <h2>Temporal</h2>
-    <div id="temporal"></div>
-
-    <h2>Spatial</h2>
-    <div id="spatial"></div>
-
-    <h2>Performance</h2>
-    <div id="performance"></div>
-    <div class="row">
-      <label>quick</label>
-      <div class="toggles">
-        <button id="half-res">½ resolution</button>
-      </div>
-    </div>
-
-    <div class="buttons">
-      <button id="reset">reset history</button>
-      <button id="copy">copy settings</button>
-    </div>
-
-    <div id="state"></div>
-  </div>
 
 </body>
 </html>
