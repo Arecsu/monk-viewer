@@ -14,18 +14,20 @@
     import { init } from "/src/lab/PicketsScene.js"
     import { startAaLab } from "/src/lab/lab-panel.js"
 
-    // The example: the camera auto-orbits and the knot spins. The shared slider drives both rates; each can be stopped
-    // on its own, and the high ceiling makes extreme per-object motion easy to test.
+    // The example: the camera auto-orbits and the knot spins. Each has its own speed slider and can be stopped independently.
     let knotTime = 0
     const motion = {
       modes: [["both", "orbit + knot"], ["knot", "knot spins"], ["orbit", "orbit"], ["still", "still"]],
       defaultMode: "both",
-      speed: { label: "orbit / knot speed", min: 0, max: 1000, step: 0.5, value: 0.5, format: (v) => v.toFixed(1) },
-      apply(mgr, { mode, speed }, dt) {
+      sliders: [
+        { id: "orbitSpeed", label: "orbit speed", min: 0, max: 5, step: 0.05, value: 0.5, format: (v) => v.toFixed(2) },
+        { id: "knotSpeed", label: "knot speed (rad/s)", min: 0, max: 10, step: 0.1, value: 0.5, format: (v) => v.toFixed(1) },
+      ],
+      apply(mgr, { mode, orbitSpeed, knotSpeed }, dt) {
         mgr.controls.autoRotate = mode === "both" || mode === "orbit"
-        mgr.controls.autoRotateSpeed = speed
-        if (mode === "both" || mode === "knot") knotTime += dt
-        if (mgr.knot) mgr.knot.rotation.y = knotTime * speed
+        mgr.controls.autoRotateSpeed = orbitSpeed
+        if (mode === "both" || mode === "knot") knotTime += dt * knotSpeed
+        if (mgr.knot) mgr.knot.rotation.y = knotTime
       },
       // Damping would otherwise ease the orbit out for seconds, by amounts too small to see but enough that TAA never
       // sees a still frame and static convergence never starts

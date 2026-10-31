@@ -25,7 +25,7 @@
     const motion = {
       modes: [["still", "still"], ["model", "model"], ["camera", "camera"], ["both", "model + camera"], ["parts", "parts (clips slide)"]],
       defaultMode: "model",
-      speed: { label: "speed °/s", min: 0, max: 36000, step: 10, value: 45, format: (v) => `${v}°` },
+      speed: { label: "speed °/s", min: 0, max: 720, step: 1, value: 45, format: (v) => `${v}°` },
       apply(mgr, { mode, speed }, dt) {
         const radians = (speed * Math.PI / 180) * dt
         if (mode === "model" || mode === "both") mgr.model.rotateY(-radians)

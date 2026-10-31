@@ -34,12 +34,13 @@ const panelMarkup = (title, motion) => `
       <select id="motion-mode">
         ${motion.modes.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}
       </select>
-      <output id="motion-speed-out"></output>
     </div>
-    <div class="row">
-      <label for="motion-speed">${motion.speed.label}</label>
-      <input id="motion-speed" type="range" min="${motion.speed.min}" max="${motion.speed.max}" step="${motion.speed.step}" />
-    </div>
+    ${(motion.sliders ?? [{ id: "speed", ...motion.speed }]).map((slider) => `
+      <div class="row">
+        <label for="motion-${slider.id}">${slider.label}</label>
+        <input id="motion-${slider.id}" type="range" min="${slider.min}" max="${slider.max}" step="${slider.step}" />
+        <output id="motion-${slider.id}-out"></output>
+      </div>`).join("")}
 
     <h2>Toggles</h2>
     <div class="toggles" id="toggles"></div>
@@ -134,7 +135,8 @@ const panelMarkup = (title, motion) => `
  * @param {Function} lab.init - Creates the manager from the options, e.g. renderer.js `init`.
  * @param {Object} lab.options - Scene-specific manager options (model, environment, camera distances...).
  * @param {Object} lab.motion - `{ modes: [[value, label]], defaultMode, speed: {label, min, max, step, value, format},
- *   apply(mgr, state, dt), modeChanged?(mgr, state) }`. `apply` runs after the manager's own scene update every frame.
+ *   sliders: [{id, label, min, max, step, value, format}], apply(mgr, state, dt), modeChanged?(mgr, state) }`.
+ *   Use `speed` for one slider or `sliders` for multiple named controls. `apply` runs after the manager's scene update.
  * @param {string} [lab.title] - Panel heading.
  * @param {Object} [lab.grading] - GT7 tone mapping values applied on load, for scenes lit differently.
  * @param {number} [lab.maxPixelRatio] - Caps the device pixel ratio of live (non-fixed) runs.
@@ -207,7 +209,8 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 	// --- Motion, so the same pose can be compared while still and while moving --------------------------------
 	// The built-in auto-rotation is replaced by the page's motion adapter, which the panel controls, so still frames
 	// converge and moving frames are reproducible.
-	const motionState = { mode: motion.defaultMode, speed: motion.speed.value }
+	const motionSliders = motion.sliders ?? [{ id: "speed", ...motion.speed }]
+	const motionState = { mode: motion.defaultMode, ...Object.fromEntries(motionSliders.map((slider) => [slider.id, slider.value])) }
 	let lastMotionTime = performance.now()
 	mgr.canAnimate = () => false
 
@@ -549,7 +552,10 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 		smaa.disabled = !mgr.smaaPass
 		// Native WebGPU only
 		toggleButtons.get("specialize").button.disabled = !("specializeShader" in t)
-		$("motion-speed-out").textContent = motion.speed.format(motionState.speed)
+		for (const slider of motionSliders) {
+			$(`motion-${slider.id}-out`).textContent = slider.format(motionState[slider.id])
+			$(`motion-${slider.id}`).value = motionState[slider.id]
+		}
 
 		for (const [key, { input, output, decimals, get }] of sliderRows) {
 			const value = get()
@@ -606,8 +612,13 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 			T().reset()
 			refresh()
 		})
-		$("motion-speed").addEventListener("input", (e) => { motionState.speed = Number(e.target.value); refresh() })
-		$("motion-speed").value = motionState.speed
+		for (const slider of motionSliders) {
+			$(`motion-${slider.id}`).addEventListener("input", (e) => {
+				motionState[slider.id] = Number(e.target.value)
+				refresh()
+			})
+			$(`motion-${slider.id}`).value = motionState[slider.id]
+		}
 
 		$("reset").addEventListener("click", () => { T().reset(); refresh() })
 		$("half-res").addEventListener("click", () => {
