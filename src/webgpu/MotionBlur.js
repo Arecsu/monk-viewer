@@ -412,6 +412,8 @@ export class WebGpuMotionBlur {
         // the input through instead of reading a stale reduction or an undefined state texture.
         if(!hasMotion || state === null) {
 
+            // The input passes through unchanged, so it keeps the bounds it was certified with
+            if(bounds) this.backgroundBounds.copy(bounds);
             return { color };
 
         }

@@ -1043,6 +1043,12 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
     private readonly history: [WebGLRenderTarget, WebGLRenderTarget];
     private frame: number;
     private stillFrames: number;
+
+    /**
+     * Whether the latest frame had no motion at all: valid history, unchanged camera and tracked object, and no mesh
+     * moved on its own. Its motion state is zero everywhere, so {@link MotionBlurPass} would be an exact copy.
+     */
+    motionless = false;
     private _blend: number;
     private _reactiveMask: Texture | null = null;
     private _reactiveStrength = 1.0;
@@ -1644,6 +1650,7 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
         // Restart the jitter sequence so that convergence after a reset is deterministic
         this.frame = 0;
         this.stillFrames = 0;
+        this.motionless = false;
 
     }
 
@@ -1792,10 +1799,11 @@ export class TemporalAAPass extends Pass<TemporalAAMaterial> {
         }
 
         // With per-object velocity, a part can move on its own while the camera and the tracked object rest
-        const still = this.staticConvergence && uniforms.historyValid.value &&
+        this.motionless = uniforms.historyValid.value &&
             matricesEqual(this.viewProjection, this.previousViewProjection) &&
             matricesEqual(this.objectMatrix, this.previousObjectMatrix) &&
             !(this._velocityBuffer !== null && uniforms.useVelocityBuffer.value && this._velocityBuffer.meshesMoved);
+        const still = this.staticConvergence && this.motionless;
 
         this.stillFrames = still ? this.stillFrames + 1 : 0;
         uniforms.blend.value = still ? Math.max(1.0 / (1.0 / this._blend + this.stillFrames), this.staticBlend) : this._blend;

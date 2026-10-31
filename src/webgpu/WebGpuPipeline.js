@@ -219,7 +219,8 @@ export class WebGpuPipeline {
         color: taa.color,
         state: taa.state,
         bounds: this.taa.enabled ? this.taa.backgroundBounds : null,
-        hasMotion: this.taa.enabled,
+        // A frame without any motion blurs to an exact copy: skip it
+        hasMotion: this.taa.enabled && !this.taa.motionless,
       });
       const bounds = this.motionBlur.enabled ? this.motionBlur.backgroundBounds
         : this.taa.enabled ? this.taa.backgroundBounds : null;

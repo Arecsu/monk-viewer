@@ -285,6 +285,7 @@ export class WebGpuTemporalAA {
     this._frame = 0;
     this._stillFrames = 0;
     this._historyValid = false;
+    this._motionless = false;
     this._disposed = false;
     this._jittered = false;
     this._jitterCamera = null;
@@ -371,6 +372,13 @@ export class WebGpuTemporalAA {
 
   /** The number of still frames accumulated by static convergence. */
   get stillFrames() { return this._stillFrames; }
+
+  /**
+   * Whether the latest frame had no motion at all: valid history, unchanged camera and tracked object, and no mesh
+   * moved on its own. Its motion state is zero everywhere, so the motion blur would be an exact copy. Unlike
+   * {@link stillFrames} it doesn't depend on staticConvergence.
+   */
+  get motionless() { return this._motionless; }
 
   /** Whether the history is valid for the next frame. */
   get historyValid() { return this._historyValid; }
@@ -624,8 +632,8 @@ export class WebGpuTemporalAA {
 
     const velocityMoved = useVelocity &&
       (meshesMoved ?? this._velocityBuffer?.meshesMoved ?? false);
-    const still = isTemporalStill({
-      staticConvergence: this._staticConvergence,
+    this._motionless = isTemporalStill({
+      staticConvergence: true,
       historyValid: this._historyValid,
       viewProjection: this._viewProjection,
       previousViewProjection: this._previousViewProjection,
@@ -633,6 +641,8 @@ export class WebGpuTemporalAA {
       previousObjectMatrix: this._previousObjectMatrix,
       meshesMoved: velocityMoved
     });
+    // Static convergence: the same test, only when enabled
+    const still = this._staticConvergence && this._motionless;
 
     this._stillFrames = still ? this._stillFrames + 1 : 0;
     uniform.historyValid.value = this._historyValid;
@@ -708,6 +718,7 @@ export class WebGpuTemporalAA {
     this._frame = 0;
     this._stillFrames = 0;
     this._historyValid = false;
+    this._motionless = false;
     this._uniforms.historyValid.value = false;
     this._uniforms.previousJitter.value.copy(this._jitter);
     this.backgroundBounds.copy(FULL_SCREEN);

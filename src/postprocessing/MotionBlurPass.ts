@@ -516,8 +516,9 @@ export class MotionBlurPass extends Pass<MotionBlurMaterial> {
         const taa = this.taa;
         const gather = this.gatherMaterial.uniforms;
         const state = taa.stateTexture;
-        // Without TAA there is no motion: pass the image through
-        gather.hasMotion.value = taa.enabled;
+        // Without TAA, or in a frame without any motion, there is nothing to blur: pass the image through
+        const hasMotion = taa.enabled && !taa.motionless;
+        gather.hasMotion.value = hasMotion;
         gather.frame.value = this.frame++ % 64;
         gather.stateBuffer.value = state;
         this.tileMaxXMaterial.uniforms.stateBuffer.value = state;
@@ -534,7 +535,7 @@ export class MotionBlurPass extends Pass<MotionBlurMaterial> {
 
         }
 
-        if(taa.enabled) {
+        if(hasMotion) {
 
             this.fullscreenMaterial = this.tileMaxXMaterial;
             this.setRenderTarget(this.tileMaxX);
