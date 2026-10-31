@@ -143,6 +143,7 @@ uniform highp sampler2D stateBuffer;
 uniform highp sampler2D neighbourBuffer;
 uniform int tileSize;
 uniform int samples;
+uniform bool adaptiveSamples;
 uniform float shutter;
 uniform float maxBlur;
 uniform float softDepth;
@@ -232,9 +233,15 @@ void main() {
 	// rather than the fastest motion around, which may point elsewhere
 	bool ownDirection = lengthX > 0.5;
 
-	for(int i = 0; i < samples; ++i) {
+	// Adaptive: about one sample per pixel of the longest streak around (2 * lengthN pixels), even, at least 4. A short
+	// streak spends the full count on the same few pixels. Each sample then stands for samples / count of them, so the
+	// pixel's own weight keeps its share.
+	int count = adaptiveSamples ? min(samples, max(4, 2 * int(ceil(lengthN)))) : samples;
+	float sampleWeight = float(samples) / float(count);
 
-		float t = mix(-1.0, 1.0, (float(i) + j + 1.0) / (float(samples) + 1.0));
+	for(int i = 0; i < count; ++i) {
+
+		float t = mix(-1.0, 1.0, (float(i) + j + 1.0) / (float(count) + 1.0));
 		vec2 direction = (ownDirection && (i & 1) == 1) ? vX : vN;
 		vec2 offset = direction * t;
 		ivec2 y = clamp(x + ivec2(round(offset)), ivec2(0), size - 1);
@@ -245,8 +252,8 @@ void main() {
 		float zY = viewDepth(stateY.x);
 
 		// McGuire et al.: a blurry foreground Y over X, the background Y behind a blurry X, both blurry
-		float w = inFront(zY, zX) * cone(d, lengthY) + inFront(zX, zY) * cone(d, lengthX) +
-			cylinder(d, lengthY) * cylinder(d, lengthX) * 2.0;
+		float w = (inFront(zY, zX) * cone(d, lengthY) + inFront(zX, zY) * cone(d, lengthX) +
+			cylinder(d, lengthY) * cylinder(d, lengthX) * 2.0) * sampleWeight;
 
 		weight += w;
 		sum += texelFetch(inputBuffer, y, 0).rgb * w;
@@ -303,6 +310,15 @@ export interface MotionBlurPassOptions {
     samples?: number;
 
     /**
+     * Scales the sample count with the streak length, up to {@link samples}: about one sample per pixel of streak, at
+     * least 4. Short streaks (slow motion) otherwise spend every sample on the same few pixels.
+     *
+     * @defaultValue true
+     */
+
+    adaptiveSamples?: boolean;
+
+    /**
      * The view depth distance over which a surface goes from "in front" to "behind" another, in scene units.
      *
      * @defaultValue 0.052
@@ -351,6 +367,7 @@ export class MotionBlurPass extends Pass<MotionBlurMaterial> {
         shutter = 0.6,
         maxBlur = 0.08,
         samples = 12,
+        adaptiveSamples = true,
         softDepth = 0.052
     }: MotionBlurPassOptions = {}) {
 
@@ -374,6 +391,7 @@ export class MotionBlurPass extends Pass<MotionBlurMaterial> {
             stateBuffer: new Uniform(null),
             neighbourBuffer: new Uniform(null),
             samples: new Uniform(samples),
+            adaptiveSamples: new Uniform(adaptiveSamples),
             softDepth: new Uniform(softDepth),
             frame: new Uniform(0),
             bounds: new Uniform(this.backgroundBounds),
@@ -443,6 +461,19 @@ export class MotionBlurPass extends Pass<MotionBlurMaterial> {
     set samples(value: number) {
 
         this.gatherMaterial.uniforms.samples.value = value;
+
+    }
+
+    /** @see {@link MotionBlurPassOptions.adaptiveSamples} */
+    get adaptiveSamples(): boolean {
+
+        return this.gatherMaterial.uniforms.adaptiveSamples.value;
+
+    }
+
+    set adaptiveSamples(value: boolean) {
+
+        this.gatherMaterial.uniforms.adaptiveSamples.value = value;
 
     }
 

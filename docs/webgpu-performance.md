@@ -44,6 +44,75 @@ noise, not a negative cost.
 (WebGL) versus 0.92–2.88 ms (native) for the opaque geometry stage at that size, but that is a stage measurement, not
 the whole viewer.
 
+## Full-screen scene and temporal upscaling (2560×1600, MacBook Air M1, headless Chrome 156)
+
+The numbers above are the monk model against black, where TAA, motion blur and bloom skip everything outside the model
+(background fast path). `aa-lab-pickets.html` fills the screen with a coloured background, so every pass runs on every
+pixel. Measured with the lab's **benchmark** button (back-to-back frames, one drain, single renderer):
+
+| Stage switched off (cumulative) | native | TAAU 2× (render 1280×800) |
+|---|---:|---:|
+| everything on | 18.0 ms | 16.2 ms |
+| − bloom | 17.1 | 16.1 |
+| − motion blur | 13.1 | 12.5 |
+| − TAA | 7.4 | 5.9 |
+| − MSAA | 7.0 | 5.4 |
+
+TAA pass alone (on minus off, bloom and motion blur off): native 4.6 ms, upscaling variant 5.3 ms. Full frame at render
+scale 1 / 0.67 / 0.5: 15.9 / 15.5 / 16.0 ms (pickets), 6.5 / 6.1 / 6.0 ms (monk model).
+
+What this means:
+
+* On this scene the geometry is cheap (about 1.5 ms saved at 2×) and the output-resolution passes dominate. TAA and
+  motion blur run per output pixel by design, so temporal upscaling cannot reduce them.
+* The TAA pass is memory bound at this size: it writes history (rgba16f), output (rg11b10) and state (rgba16f), 20 B per
+  output pixel, and reads about as much. On ~68 GB/s that is ~3 ms per frame before any math. The pmndrs FSR3 port's own
+  passes report ~8–9 ms on the same machine, for the same reason.
+* The upscaling TAA is a separate material (`createTemporalAAMaterial(..., { upscale: true })`). Folding it into the
+  native one behind a uniform branch made the native pass ~35% slower (occupancy), even with the branch skipped. The
+  native WGSL is verified byte-identical to the version before upscaling existed.
+* Upscaling pays off where shading is expensive per pixel; it is a quality/feature option here, not a speed-up.
+
+## Output-resolution passes: what costs and what was cut
+
+Same setup (pickets lab, native, 2560×1600, M1, default 0.5 orbit), bloom off unless stated.
+
+**Motion blur** (~4.1 ms): the gather was ~3.4 ms, the row tile max ~0.4 ms, the column tile max and neighbour max
+below noise. The orbit moves ~1.6 px per frame, so the half streak is ~0.6 px, yet every pixel took 12 samples that
+round onto the same 2–3 pixels. `adaptiveSamples` (both backends, default on, lab toggle "adaptive samples") takes
+about one sample per pixel of the neighbourhood's streak, even, at least 4, at most `samples`, and weighs each one
+`samples / count` so the pixel's own weight keeps its share.
+
+| | blur cost | error vs a 48-sample gather (mean, max share > 2 codes) |
+|---|---:|---|
+| 12 samples, 0.5 orbit | 4.07 ms | 0.047 codes, 0.00% |
+| adaptive, 0.5 orbit | 2.24 ms | 0.047 codes, 0.03% |
+| 12 samples, 3.0 orbit | 6.67 ms | 0.142 codes, 0.93% |
+| adaptive, 3.0 orbit | 4.50 ms | 0.212 codes, 2.33% |
+
+WebGL reference: 28.6 → 27.4 ms (pickets), 20.2 → 19.5 ms (monk) per frame.
+
+**TAA** (~4.6 ms on, plus the bypass): removing parts of the shader one at a time (8 of the 9 depth taps, the
+Catmull-Rom history filter, the per-sample encode, the Gaussian `exp`s, the state and velocity reads) moved it by noise
+only. Stopping after the neighbourhood filter left ~1.9 ms, so ~2.7 ms is the validation/clip/lock/blend half, whose
+cost is the union of its feature branches: every option is a uniform branch the compiler keeps, with its registers.
+`specializeShader` (native, default on, lab toggle "specialized TAA shader") bakes the discrete settings in as
+constants (`SPECIALIZED_SETTINGS`), one cached material per combination, compiled on first use:
+
+| | TAA pass | rest of frame incl. TAA bypass |
+|---|---:|---:|
+| uniform branches | 4.66 ms | 6.80 ms |
+| specialized | 4.07 ms | 5.98 ms |
+
+The output is bit-identical: 24 frames from a reset history, modern and legacy presets, 0 of 4,096,000 pixels differ.
+
+**Whole frame, everything on** (bloom, motion blur, TAA, 4× MSAA), both changes vs neither, two rounds:
+pickets 16.5 / 16.9 → 13.1 / 13.3 ms (−21%), monk model 7.7 / 6.9 → 7.3 / 6.2 ms (−5 to −10%; its bounds already skip the
+background).
+
+Not changed: the TAA attachments are memory-bound (history rgba16f, output rg11b10, state rgba16f) and each is read
+downstream; the remaining ~0.4 ms row tile max reads every state texel once by design.
+
 ## Optimizations shipped in this change
 
 Both remove a full-resolution pass, which is what matters at large sizes:

@@ -38,14 +38,51 @@ const NEIGHBOURS = [
 ];
 
 /**
+ * The discrete settings a specialized material bakes in as constants, with their node types. Everything else (blend,
+ * gammas, tolerances, per-frame state) stays a uniform.
+ */
+export const SPECIALIZED_SETTINGS = Object.freeze({
+  neighbourCount: 'int',
+  boxMode: 'int',
+  debugView: 'int',
+  jitterCompensation: 'float',
+  clipTowardsCurrent: 'bool',
+  depthRejection: 'bool',
+  motionRejection: 'bool',
+  thinFeatureLocks: 'bool',
+  edgeAdaptiveBlend: 'bool',
+  sampleConfidence: 'bool',
+  useVelocityBuffer: 'bool'
+});
+
+const constantNode = (type, value) => type === 'int' ? int(value) : type === 'float' ? float(value) : TSL.bool(value);
+
+/**
  * Builds the TSL fullscreen material that reads the current frame and the previous history and writes
  * history/output/state as one three-attachment draw.
  *
+ * `upscale` builds the temporal upscaling variant (the current frame smaller than the output). It is a separate
+ * material rather than a uniform branch: the extra live values of the upscaling path cost the native one occupancy
+ * (~35% of the TAA pass at 2560x1600 on an M1) even when skipped, so the native material is the unchanged graph.
+ *
  * @param {Object} uniforms - TSL uniform nodes shared with {@link WebGpuTemporalAA}.
  * @param {Object} textures - TSL texture nodes: color, depth, velocity, reactive, history and state.
+ * `constants` specializes the material: the listed {@link SPECIALIZED_SETTINGS} become constants instead of uniforms,
+ * so the shader compiler drops the disabled paths. The math is the same; every feature switch otherwise stays in the
+ * shader as a uniform branch, and the union of all of them costs registers and occupancy (measured ~1.4 ms per frame
+ * at 2560x1600 on an M1, TAA pass and bypass together).
+ *
+ * @param {Object} [options]
+ * @param {boolean} [options.upscale=false] - Build the temporal upscaling variant.
+ * @param {?Object} [options.constants=null] - Values for {@link SPECIALIZED_SETTINGS}; null keeps them all uniforms.
  * @returns {GPU.MeshBasicNodeMaterial} The resolve material. It owns no textures.
  */
-export function createTemporalAAMaterial(uniforms, textures) {
+export function createTemporalAAMaterial(uniforms, textures, { upscale = false, constants = null } = {}) {
+
+  if (constants !== null) {
+    uniforms = { ...uniforms };
+    for (const [name, type] of Object.entries(SPECIALIZED_SETTINGS)) uniforms[name] = constantNode(type, constants[name]);
+  }
 
   const {
     enabled,
@@ -85,6 +122,10 @@ export function createTemporalAAMaterial(uniforms, textures) {
     objectMotion,
     texelSize,
     size,
+    renderTexelSize,
+    renderSize,
+    inputScale,
+    upscaleConfidenceFloor,
     jitterOffset,
     previousJitter,
     backgroundBounds
@@ -97,8 +138,20 @@ export function createTemporalAAMaterial(uniforms, textures) {
   // Algorithmic (bottom-left) -> storage (top-left). The fragment writes its own pixel, so only reads convert.
   const logicalPixel = () => ivec2(screenCoordinate.x, height().sub(1).sub(int(screenCoordinate.y)));
   const sampleLogical = (source, uv) => texture(source, vec2(uv.x, float(1).sub(uv.y)));
+  // Output-sized textures: the history state, and natively the current frame too
   const loadLogical = (source, pixel) => textureLoad(source, ivec2(pixel.x, height().sub(1).sub(pixel.y)));
+  // Upscaling: render-sized textures (the current frame)
+  const loadRender = upscale ?
+    (source, pixel) => textureLoad(source, ivec2(pixel.x, int(renderSize.y).sub(1).sub(pixel.y))) : loadLogical;
   const textureSizeInt = (source) => ivec2(textureSize(source));
+  // Texel steps of the current frame's depth
+  const inputTexelSize = upscale ? renderTexelSize : texelSize;
+
+  // Upscaling: the current frame is rendered at renderSize, jittered by jitterOffset render pixels, so the sample of
+  // render texel k sits at k + 0.5 + jitter. Output pixel centres map to renderPosition in the same continuous render
+  // coordinates; renderBase is the texel that contains it. Natively renderBase is the output pixel, centreOffset 0.
+  const renderPosition = () => vec2(logicalPixel()).add(0.5).mul(inputScale);
+  const renderBase = upscale ? () => ivec2(floor(renderPosition())) : logicalPixel;
 
   const RGBToYCoCg = (c) => vec3(
     c.r.mul(0.25).add(c.g.mul(0.5)).add(c.b.mul(0.25)),
@@ -122,12 +175,17 @@ export function createTemporalAAMaterial(uniforms, textures) {
     return clamped.div(clamped.oneMinus().mul(exposure));
   };
 
-  // Encoded YCoCg colour of the current frame at a logical texel offset.
-  const sampleCurrent = (offset) => {
+  // Encoded YCoCg colour of the current frame at a render texel offset from renderBase.
+  const sampleCurrent = (base, offset) => {
     const maximum = textureSizeInt(color).sub(1);
-    const coord = clamp(logicalPixel().add(ivec2(offset[0], offset[1])), ivec2(0), maximum);
-    return RGBToYCoCg(encode(loadLogical(color, coord).rgb));
+    // Natively base is null and the output pixel is rebuilt per load, exactly as before upscaling existed.
+    const coord = clamp((base ?? logicalPixel()).add(ivec2(offset[0], offset[1])), ivec2(0), maximum);
+    return RGBToYCoCg(encode(loadRender(color, coord).rgb));
   };
+
+  // The current frame at the output pixel without temporal reconstruction: its own texel natively, bilinear when
+  // upscaling (the naive upscale, also used outside the history bounds and with TAA off).
+  const currentInput = (uv) => upscale ? sampleLogical(color, uv).rgb : loadLogical(color, logicalPixel()).rgb;
 
   // 5-tap Catmull-Rom. Bilinear history blurs a little more every frame while the model rotates.
   const sampleHistory = (uv) => {
@@ -231,7 +289,7 @@ export function createTemporalAAMaterial(uniforms, textures) {
       .or(uv.x.greaterThan(backgroundBounds.z)).or(uv.y.greaterThan(backgroundBounds.w));
 
     If(outside, () => {
-      const input = loadLogical(color, logicalPixel()).rgb;
+      const input = currentInput(uv);
       historyColor.assign(select(enabled, vec4(0.0, 0.0, 0.0, 1.0), vec4(input, 1.0)));
       outputColor.assign(select(enabled, vec3(0.0), input));
       stateColor.assign(vec4(0.0));
@@ -243,7 +301,7 @@ export function createTemporalAAMaterial(uniforms, textures) {
 
       for (let i = 0; i < 9; ++i) {
         If(neighbourCount.greaterThan(int(i)), () => {
-          const candidate = uv.add(vec2(NEIGHBOURS[i][0], NEIGHBOURS[i][1]).mul(texelSize));
+          const candidate = uv.add(vec2(NEIGHBOURS[i][0], NEIGHBOURS[i][1]).mul(inputTexelSize));
           const candidateDepth = sampleLogical(depth, candidate);
           If(candidateDepth.lessThan(closestDepth), () => {
             closestDepth.assign(candidateDepth);
@@ -254,7 +312,7 @@ export function createTemporalAAMaterial(uniforms, textures) {
 
       const motionData = reproject(closestUv, closestDepth).toVar('taaMotionData');
       const historyUv = uv.add(motionData.xy.sub(closestUv))
-        .add(jitterOffset.sub(previousJitter).mul(jitterCompensation).mul(texelSize)).toVar('taaHistoryUv');
+        .add(jitterOffset.sub(previousJitter).mul(jitterCompensation).mul(inputTexelSize)).toVar('taaHistoryUv');
 
       // The motion this pixel is reprojected with, in pixels. Stored for the motion blur and the motion validation.
       const velocityPixels = closestUv.sub(motionData.xy).div(texelSize).toVar('taaVelocityPixels');
@@ -263,7 +321,7 @@ export function createTemporalAAMaterial(uniforms, textures) {
       // Disabled TAA is a pure bypass: no jitter, no filtering. The pipeline reports no motion and uses full bounds,
       // so the state is not consumed; it is still written fresh rather than leaving stale motion behind.
       If(enabled.not(), () => {
-        const input = loadLogical(color, logicalPixel()).rgb;
+        const input = currentInput(uv);
         historyColor.assign(vec4(input, 1.0));
         outputColor.assign(input);
         stateColor.assign(vec4(motionData.w, 0.0, velocityPixels.x, velocityPixels.y));
@@ -280,10 +338,18 @@ export function createTemporalAAMaterial(uniforms, textures) {
         const filterWeight = float(0.0).toVar();
         const lumaMin = float(1e9).toVar();
         const lumaMax = float(-1e9).toVar();
+        // Upscaling only: the render texel holding the output pixel centre, the distance from that centre to its
+        // sample in render pixels, and the kernel rescaled so that distances count in output pixels (one render
+        // pixel is 1 / inputScale output pixels). Kept to three values: the loop below is the same as the native
+        // one, extra live state there costs occupancy.
+        const base = upscale ? renderBase().toVar('taaRenderBase') : null;
+        const baseOffset = upscale ?
+          vec2(base).add(0.5).sub(renderPosition()).add(jitterOffset).toVar('taaBaseOffset') : jitterOffset;
+        const kernel = upscale ? sharpness.div(inputScale.mul(inputScale)).toVar('taaKernel') : sharpness;
 
         // All 9 are fetched: the thin feature test and the edge contrast always look at the full 3x3.
         for (let i = 0; i < 9; ++i) {
-          const c = sampleCurrent(NEIGHBOURS[i]);
+          const c = sampleCurrent(base, NEIGHBOURS[i]);
           samples[i] = c;
           lumaMin.assign(min(lumaMin, c.x));
           lumaMax.assign(max(lumaMax, c.x));
@@ -296,9 +362,10 @@ export function createTemporalAAMaterial(uniforms, textures) {
 
             // Reconstruct the pixel from the jittered samples around it, weighted by their distance to the pixel
             // centre. Without it, the history converges to a box filter and leaves steps on thin near-horizontal
-            // lines. Gaussian, as in Karis 2014.
-            const d = vec2(NEIGHBOURS[i][0], NEIGHBOURS[i][1]).add(jitterOffset);
-            const w = exp(d.dot(d).mul(sharpness).mul(-1.0));
+            // lines. Gaussian, as in Karis 2014. Upscaling measures the distance in output pixels, so the history
+            // converges to output-resolution detail: each frame adds mostly where a sample lands near the pixel.
+            const d = vec2(NEIGHBOURS[i][0], NEIGHBOURS[i][1]).add(baseOffset);
+            const w = exp(d.dot(d).mul(kernel).mul(-1.0));
             filtered.addAssign(c.mul(w));
             filterWeight.addAssign(w);
           });
@@ -308,6 +375,19 @@ export function createTemporalAAMaterial(uniforms, textures) {
         // conditional history branch) and the final unconditional mix reads an uninitialized var when that branch is
         // skipped, e.g. static convergence sets clipHistory false.
         const current = filtered.div(filterWeight).toVar('taaCurrent');
+        // Upscaling: this frame alone, bilinearly upscaled, for pixels without usable history (the Gaussian above is
+        // sharp in output pixels, so on its own it shows the render pixel grid); and how close the nearest sample came
+        // to the output pixel centre: per axis the samples are one render pixel apart, so the nearest is at most half
+        // of one away (Blackman-Harris fit in output pixels, as the sample confidence below). Natively the samples are
+        // dense and both are unnecessary.
+        const currentSmooth = upscale ?
+          RGBToYCoCg(encode(sampleLogical(color, uv).rgb)).toVar('taaCurrentSmooth') : current;
+        const nearestConfidence = upscale ? (() => {
+          const phase = renderPosition().sub(0.5).sub(jitterOffset);
+          const f = phase.sub(floor(phase));
+          const nearest = min(f, vec2(1.0).sub(f)).div(inputScale);
+          return exp(nearest.dot(nearest).mul(-2.29)).toVar('taaNearestConfidence');
+        })() : null;
         const currentDepth = motionData.w.toVar('taaCurrentDepth');
 
         // Glass and other transparent surfaces (FSR 2 "reactive mask"): their reflections and scratches move on
@@ -315,7 +395,9 @@ export function createTemporalAAMaterial(uniforms, textures) {
         const reactiveAmount = float(0.0).toVar();
 
         If(reactiveStrength.greaterThan(0.0), () => {
-          const coord = min(ivec2(screenCoordinate), textureSizeInt(reactive).sub(1));
+          // Upscaling: the mask is render-sized; storage coordinates scale directly (both are top-left).
+          const pixel = upscale ? ivec2(vec2(screenCoordinate.xy).mul(inputScale)) : ivec2(screenCoordinate);
+          const coord = min(pixel, textureSizeInt(reactive).sub(1));
           reactiveAmount.assign(reactiveStrength.mul(textureLoad(reactive, coord).x));
         });
 
@@ -340,8 +422,8 @@ export function createTemporalAAMaterial(uniforms, textures) {
           .or(historyUv.x.greaterThan(1.0)).or(historyUv.y.greaterThan(1.0));
 
         If(historyValid.not().or(offscreen), () => {
-          historyColor.assign(vec4(decode(YCoCgToRGB(current)), 1.0));
-          outputColor.assign(decode(YCoCgToRGB(current)));
+          historyColor.assign(vec4(decode(YCoCgToRGB(currentSmooth)), 1.0));
+          outputColor.assign(decode(YCoCgToRGB(currentSmooth)));
           stateColor.assign(vec4(currentDepth, thin.mul(reactiveAmount.oneMinus()),
             velocityPixels.x, velocityPixels.y));
         }).Else(() => {
@@ -415,11 +497,16 @@ export function createTemporalAAMaterial(uniforms, textures) {
           const rawHistory = RGBToYCoCg(encode(sampleHistory(historyUv))).toVar('taaRawHistory');
           const resolvedHistory = rawHistory.toVar('taaResolvedHistory');
 
+          // Upscaling: rejected history is replaced by this frame alone, the smooth upscale rather than the sparse
+          // samples. Natively both are the same colour.
+          const rejected = depthRejection.or(motionRejection).and(match.equal(0.0));
+          const target = upscale ? select(rejected, currentSmooth, current).toVar('taaTarget') : current;
+
           If(clipHistory, () => {
             If(clipTowardsCurrent, () => {
               // The current colour is what the pixel actually shows, so the clipped history keeps its hue and stays
               // on the right side of an edge (Pedersen 2016).
-              resolvedHistory.assign(mix(clipTowards(boxMin, boxMax, current, rawHistory), rawHistory, lockWeight));
+              resolvedHistory.assign(mix(clipTowards(boxMin, boxMax, target, rawHistory), rawHistory, lockWeight));
             }).Else(() => {
               resolvedHistory.assign(mix(clipToBox(boxMin, boxMax, rawHistory), rawHistory, lockWeight));
             });
@@ -435,18 +522,24 @@ export function createTemporalAAMaterial(uniforms, textures) {
                 contrast.mul(match).mul(reactiveAmount.oneMinus())));
             });
 
-            If(sampleConfidence, () => {
-              // Blackman-Harris fit, so the worst jitter position still weighs about a third.
-              const confidence = max(exp(jitterOffset.dot(jitterOffset).mul(-2.29)), 0.25);
-              alpha.mulAssign(confidence);
-            });
+            if (upscale) {
+              // This frame only counts as much as its nearest sample is close to the output pixel: what accumulates
+              // output-resolution detail from render-resolution frames. Replaces the sample confidence.
+              alpha.mulAssign(max(nearestConfidence, upscaleConfidenceFloor));
+            } else {
+              If(sampleConfidence, () => {
+                // Blackman-Harris fit, so the worst jitter position still weighs about a third.
+                const confidence = max(exp(jitterOffset.dot(jitterOffset).mul(-2.29)), 0.25);
+                alpha.mulAssign(confidence);
+              });
+            }
 
-            If(depthRejection.or(motionRejection).and(match.equal(0.0)), () => {
+            If(rejected, () => {
               alpha.assign(max(alpha, disocclusionBlend));
             });
           });
 
-          const result = mix(resolvedHistory, current, alpha);
+          const result = mix(resolvedHistory, target, alpha);
           const decoded = decode(YCoCgToRGB(result));
 
           historyColor.assign(vec4(decoded, 1.0));
@@ -482,7 +575,7 @@ export function createTemporalAAMaterial(uniforms, textures) {
   });
 
   const material = new GPU.MeshBasicNodeMaterial({
-    name: 'TemporalAAMaterial',
+    name: upscale ? 'TemporalAAUpscaleMaterial' : 'TemporalAAMaterial',
     depthTest: false,
     depthWrite: false,
     toneMapped: false

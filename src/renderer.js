@@ -17,7 +17,7 @@ import { RenderPipeline, ClearPass, GeometryPass, EffectPass, ToneMappingEffect,
 // import HDRIMAP from "./envmaps/old_bus_depot_4k_blur.jpg?url"
 import { easeOutQuart, easeInCubic, easeOutCubic } from "js-easing-functions"
 
-class ThreeSceneManager {
+export class ThreeSceneManager {
 	constructor(data) {
 		this.options = data
 		this.disposed = false
@@ -593,7 +593,41 @@ class ThreeSceneManager {
 	}
 
 	loadAssets() {
-		return Promise.all([this.loadArtworkModel(), this.loadHDREnvironment()])
+		return Promise.all([this.loadModel(), this.loadHDREnvironment()])
+	}
+
+	/** Loads the model and hands it to addModel(). Subclasses override it to build a scene in code. */
+	loadModel() {
+		return this.loadArtworkModel()
+	}
+
+	/**
+	 * Prepares a loaded model for the active pipeline (material conversion/patches, TAA tracking), compiles it and
+	 * adds it to the scene. Lights the model depends on must already be in the scene for the WebGL compile.
+	 */
+	async addModel(model) {
+		this.model = model
+		this.initialModelRotation = this.model.quaternion.clone()
+		this.model.traverse((child) => {
+			if (child.material) child.material.needsUpdate = true
+		})
+		// First: it gives every mesh its own material, which the other patches then apply to
+		if (this.backendStatus.selected === 'webgpu') {
+			this.pipeline.prepare(this.model)
+		} else {
+			this.velocityBuffer.prepare(this.model)
+			this.resolvePass?.prepare(this.model)
+			this.grazingClamp.prepare(this.model)
+			this.specularAA.prepare(this.model)
+		}
+		if (this.taa) this.taa.trackedObject = this.model
+
+		this.optimizeModelTextures(this.model)
+
+		if (this.backendStatus.selected !== 'webgpu') await this.renderer.compileAsync(this.model, this.camera, this.scene)
+		if (this.disposed) { disposeObject(this.model); return }
+
+		this.scene.add(this.model)
 	}
 
 	loadArtworkModel() {
@@ -603,41 +637,9 @@ class ThreeSceneManager {
 				this.modelUrl,
 				async (gltf) => {
 					try {
-					if (this.hasAborted || this.disposed) { disposeObject(gltf.scene); resolve(); return }
-					this.model = gltf.scene
-					// model.rotation.y -= 0.6;
-					// model.rotation.x += 0.25;
-					// model.rotation.z -= 0.4;
-					this.model.scale.set(1, 1, 1)
-					this.initialModelRotation = this.model.quaternion.clone()
-
-				this.model.traverse((child) => {
-					if (child.material) {
-						child.material.needsUpdate = true
-					}
-				});
-				// First: it gives every mesh its own material, which the other patches then apply to
-				if (this.backendStatus.selected === 'webgpu') {
-					this.pipeline.prepare(this.model)
-				} else {
-					this.velocityBuffer.prepare(this.model)
-					this.resolvePass?.prepare(this.model)
-					this.grazingClamp.prepare(this.model)
-					this.specularAA.prepare(this.model)
-				}
-				if (this.taa) this.taa.trackedObject = this.model
-
-					this.optimizeModelTextures(this.model)
-
-					if (this.backendStatus.selected !== 'webgpu') await this.renderer.compileAsync(this.model, this.camera, this.scene)
-					if (this.disposed) { disposeObject(this.model); resolve(); return }
-
-					// this.mixer = new THREE.AnimationMixer(this.model)
-					// const action = this.mixer.clipAction(gltf.animations[0])
-					// action.play();
-
-					this.scene.add(this.model)
-					resolve()
+						if (this.hasAborted || this.disposed) { disposeObject(gltf.scene); resolve(); return }
+						await this.addModel(gltf.scene)
+						resolve()
 					} catch (error) { reject(error) }
 				},
 				undefined,
@@ -671,6 +673,8 @@ class ThreeSceneManager {
 	}
 
 	async loadHDREnvironment() {
+		// A scene lit only by its own lights
+		if (!this.envmapUrl) return
 		if (this.backendStatus.selected === 'webgpu') {
 			const { loadWebGpuEnvironment, optimizeWebGpuTextures } = await import('./webgpu/Environment.js')
 			this.optimizeNativeTextures = optimizeWebGpuTextures
@@ -861,18 +865,18 @@ class ThreeSceneManager {
 			 this.lastResizeTime = now;
 			 this.camera.aspect = width / height;
 			 this.camera.updateProjectionMatrix();
-
-			 // Calculate multiplier based on height-to-width ratio
-			 const ratio = height / width;
-			 this.baseCameraSettings.multiplier = this.cameraMultiplier(ratio);
-
-			//  console.log(this.baseCameraSettings.multiplier)
-			//  this.controls._goalSpherical.radius = this.controls._goalSpherical.radius * this.baseCameraSettings.multiplier;
-			this.camera.position.z = this.baseCameraSettings.targetDistance * this.baseCameraSettings.multiplier;
-			 this.controls.maxDistance = this.baseCameraSettings.maxDistance * this.baseCameraSettings.multiplier;
-			 this.controls.minDistance = this.baseCameraSettings.minDistance * this.baseCameraSettings.multiplier;
+			 this.fitCamera(width, height);
 		}
   }
+
+	/** Keeps the model framed at the new aspect ratio. Subclasses with a free camera override it. */
+	fitCamera(width, height) {
+		// Calculate multiplier based on height-to-width ratio
+		this.baseCameraSettings.multiplier = this.cameraMultiplier(height / width);
+		this.camera.position.z = this.baseCameraSettings.targetDistance * this.baseCameraSettings.multiplier;
+		this.controls.maxDistance = this.baseCameraSettings.maxDistance * this.baseCameraSettings.multiplier;
+		this.controls.minDistance = this.baseCameraSettings.minDistance * this.baseCameraSettings.multiplier;
+	}
 
 	needsResize(now, width, height, workingPixelRatio) {
 		if (now - this.lastResizeTime < this.throttleResize) return false

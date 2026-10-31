@@ -49,6 +49,16 @@ export function blurVector(x, y, shutter, maxBlurPixels) {
 
 }
 
+/**
+ * Gather samples for a neighbourhood whose longest half streak is lengthN pixels: about one per pixel of the full
+ * streak (2 * lengthN), even, at least 4, at most the configured count. Each one weighs samples / count.
+ */
+export function adaptiveSampleCount(lengthN, samples) {
+
+    return Math.min(samples, Math.max(4, 2 * Math.ceil(lengthN)));
+
+}
+
 /** The background has no depth: infinitely far, as in the reference gather. */
 export function viewDepth(z) {
 
@@ -221,6 +231,7 @@ export class WebGpuMotionBlur {
         shutter = 0.6,
         maxBlur = 0.08,
         samples = 12,
+        adaptiveSamples = true,
         softDepth = 0.052
     } = {}) {
 
@@ -238,6 +249,7 @@ export class WebGpuMotionBlur {
         this.shutterUniform = T.uniform(shutter);
         this.maxBlurPixelsUniform = T.uniform(1);
         this.samplesUniform = T.uniform(samples, "int");
+        this.adaptiveSamplesUniform = T.uniform(adaptiveSamples);
         this.softDepthUniform = T.uniform(softDepth);
         this.frameUniform = T.uniform(0);
         this.boundsUniform = T.uniform(this.backgroundBounds);
@@ -321,6 +333,19 @@ export class WebGpuMotionBlur {
 
         this._samples = value;
         this.samplesUniform.value = value;
+
+    }
+
+    /** Scales the gather's sample count with the streak length, see MotionBlurPass.adaptiveSamples. */
+    get adaptiveSamples() {
+
+        return this.adaptiveSamplesUniform.value;
+
+    }
+
+    set adaptiveSamples(value) {
+
+        this.adaptiveSamplesUniform.value = Boolean(value);
 
     }
 
@@ -569,7 +594,14 @@ export class WebGpuMotionBlur {
                     const vX = tslBlurVector(stateX.zw, this.shutterUniform, this.maxBlurPixelsUniform);
                     const lengthX = T.length(vX);
                     const zX = tslViewDepth(stateX.x);
-                    const sampleCount = T.float(this.samplesUniform).add(1);
+                    // Adaptive: about one sample per pixel of the longest streak around (2 * lengthN pixels), even, at
+                    // least 4. Each sample then stands for samples / count of them, so the pixel's own weight keeps its
+                    // share.
+                    const count = T.select(this.adaptiveSamplesUniform,
+                        T.min(this.samplesUniform, T.max(T.int(4), T.int(T.ceil(lengthN)).mul(2))),
+                        this.samplesUniform).toVar("blurSampleCount");
+                    const sampleWeight = T.float(this.samplesUniform).div(T.float(count)).toVar("blurSampleWeight");
+                    const sampleCount = T.float(count).add(1);
 
                     // A sharp pixel dominates its own colour, a blurry one is spread over its streak.
                     const weight = T.float(1).div(T.max(lengthX, 0.5)).toVar();
@@ -580,7 +612,7 @@ export class WebGpuMotionBlur {
                     const ownDirection = lengthX.greaterThan(0.5);
                     const maxPixel = T.ivec2(this.widthUniform.sub(1), this.heightUniform.sub(1));
 
-                    T.Loop(this.samplesUniform, ({ i }) => {
+                    T.Loop(count, ({ i }) => {
 
                         const t = T.mix(T.float(-1), T.float(1), T.float(i).add(jitter).add(1).div(sampleCount));
                         const direction = T.select(ownDirection.and(i.bitAnd(1).equal(1)), vX, vN);
@@ -593,7 +625,8 @@ export class WebGpuMotionBlur {
 
                         const w = tslInFront(zY, zX, this.softDepthUniform).mul(tslCone(distance, lengthY))
                             .add(tslInFront(zX, zY, this.softDepthUniform).mul(tslCone(distance, lengthX)))
-                            .add(tslCylinder(distance, lengthY).mul(tslCylinder(distance, lengthX)).mul(2));
+                            .add(tslCylinder(distance, lengthY).mul(tslCylinder(distance, lengthX)).mul(2))
+                            .mul(sampleWeight);
 
                         weight.addAssign(w);
                         sum.addAssign(loadLogical(this.colorNode, y, this.heightUniform).rgb.mul(w));

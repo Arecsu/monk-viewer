@@ -15,7 +15,8 @@ import {
     neighbourMax,
     tileMaxXRow,
     tileMaxYColumn,
-    viewDepth
+    viewDepth,
+    adaptiveSampleCount
 } from "../src/webgpu/MotionBlur.js";
 
 const close = (a: number, b: number, epsilon = 1e-12) => assert.ok(Math.abs(a - b) <= epsilon, `${a} != ${b}`);
@@ -418,4 +419,13 @@ test("reset restarts the deterministic noise frame sequence", () => {
 
     blur.dispose();
 
+});
+
+test("adaptive gather: about one sample per streak pixel, even, between 4 and the configured count", () => {
+  assert.equal(adaptiveSampleCount(0.6, 12), 4);
+  assert.equal(adaptiveSampleCount(2.1, 12), 6);
+  assert.equal(adaptiveSampleCount(5.5, 12), 12);
+  assert.equal(adaptiveSampleCount(40, 12), 12);
+  assert.equal(adaptiveSampleCount(3, 4), 4);
+  for (let length = 0.5; length < 20; length += 0.37) assert.equal(adaptiveSampleCount(length, 64) % 2, 0);
 });

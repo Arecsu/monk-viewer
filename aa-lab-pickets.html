@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AA lab · pickets</title>
+</head>
+<body>
+  <canvas id="c"></canvas>
+
+  <script type="module">
+    // The scene of pmndrs/upscaler's "02 · FSR1 vs FSR3" example (https://pmndrs.github.io/upscaler/02-fsr1-vs-fsr3/)
+    // on our pipeline, with the AA lab panel. Same query parameters and hotkeys as aa-lab.html (src/lab/lab-panel.js).
+    import { init } from "/src/lab/PicketsScene.js"
+    import { startAaLab } from "/src/lab/lab-panel.js"
+
+    // The example: the camera auto-orbits (OrbitControls.autoRotateSpeed 0.5, advanced per frame) and the knot spins
+    // at 0.5 rad/s. Each can be stopped on its own; the slider is the auto orbit speed.
+    let knotTime = 0
+    const motion = {
+      modes: [["both", "orbit + knot"], ["knot", "knot spins"], ["orbit", "orbit"], ["still", "still"]],
+      defaultMode: "both",
+      speed: { label: "orbit speed", min: 0, max: 5, step: 0.1, value: 0.5, format: (v) => v.toFixed(1) },
+      apply(mgr, { mode, speed }, dt) {
+        mgr.controls.autoRotate = mode === "both" || mode === "orbit"
+        mgr.controls.autoRotateSpeed = speed
+        if (mode === "both" || mode === "knot") knotTime += dt
+        if (mgr.knot) mgr.knot.rotation.y = knotTime * 0.5
+      },
+      // Damping would otherwise ease the orbit out for seconds, by amounts too small to see but enough that TAA never
+      // sees a still frame and static convergence never starts
+      modeChanged(mgr, { mode }) {
+        if (mode === "both" || mode === "orbit") return
+        // Before the next controls.update(), which would otherwise add one more auto orbit step
+        mgr.controls.autoRotate = false
+        mgr.controls._sphericalDelta?.set(0, 0, 0)
+      },
+    }
+
+    startAaLab({
+      init,
+      motion,
+      title: "TAA lab · pickets",
+      // The example caps the device pixel ratio at 2
+      maxPixelRatio: 2,
+      // The viewer's GT7 grade is set for a dim environment map. Matched to the example's ACES output instead
+      // (floor tile colors sampled from both pages): brighter lights need far less exposure, and ACES is more saturated
+      // (above 1.15 the tan pickets turn orange).
+      grading: { exposure: 2.4, saturation: 1.15 },
+      options: { envmapUrl: null },
+    })
+  </script>
+</body>
+</html>

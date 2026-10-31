@@ -3,12 +3,14 @@ import test from "node:test";
 import { BoxGeometry, Color, Matrix4, Mesh, MeshBasicMaterial, PerspectiveCamera, Scene, Texture, WebGPUCoordinateSystem } from "three";
 import * as GPU from "three/webgpu";
 import { webglProjection } from "../src/webgpu/Common.js";
+import { createTemporalAAMaterial } from "../src/webgpu/TemporalAAShader.js";
 import {
   WebGpuTemporalAA,
   effectiveReactiveMask,
   halton,
   isTemporalStill,
   jitterOffsetForFrame,
+  jitterPhaseCount,
   logicalPixelToStorage,
   logicalUVToStorage
 } from "../src/webgpu/TemporalAA.js";
@@ -32,7 +34,7 @@ function makeTaa(options: Record<string, unknown> = {}): WebGpuTemporalAA {
 
 // Full TSL graph build without a device. WGSLNodeBuilder is the same class the native backend uses, so this catches
 // lazy node materialization and texture-binding regressions that merely executing callback bodies cannot.
-function buildTemporalAAWGSL() {
+function buildTemporalAAWGSL({ renderWidth = 19, renderHeight = 13, options = {} as Record<string, unknown>, specialized = false } = {}) {
   const width = 19, height = 13;
   const renderer = new GPU.WebGPURenderer({ antialias: false, canvas: { width, height, style: {} } });
   // The backend is not initialized; feature queries only affect generated texture helpers, not the shader graph.
@@ -46,17 +48,24 @@ function buildTemporalAAWGSL() {
   camera.position.set(0, 0, 2);
   camera.updateMatrixWorld();
   const scene = new GPU.Scene();
-  const taa = new WebGpuTemporalAA(renderer, { camera, scene });
-  taa.setSize(width, height);
-  const input = new GPU.RenderTarget(width, height, { depthBuffer: true });
-  input.depthTexture = new GPU.DepthTexture(width, height, GPU.FloatType);
+  const taa = new WebGpuTemporalAA(renderer, { camera, scene, ...options });
+  taa.setSize(width, height, renderWidth, renderHeight);
+  const input = new GPU.RenderTarget(renderWidth, renderHeight, { depthBuffer: true });
+  input.depthTexture = new GPU.DepthTexture(renderWidth, renderHeight, GPU.FloatType);
   taa._textureNodes.color.value = input.texture;
   taa._textureNodes.depth.value = input.depthTexture;
+  // render() picks the material; the graph build here needs it chosen up front
+  if (specialized) taa._quad.material = (taa as any)._selectMaterial();
+  else if (taa.upscaling) taa._quad.material = taa._upscaleMaterial = createUpscaleMaterial(taa);
   const builder = new GPU.WGSLNodeBuilder(taa._quad, renderer);
   builder.scene = scene;
   builder.camera = camera;
   builder.build();
   return { taa, target, input, builder, source: builder.fragmentShader };
+}
+
+function createUpscaleMaterial(taa: WebGpuTemporalAA) {
+  return createTemporalAAMaterial((taa as any)._uniforms, (taa as any)._textureNodes, { upscale: true });
 }
 
 function wgslVariableDepths(source: string) {
@@ -541,5 +550,119 @@ test("generated WGSL materializes every cross-branch expression before its reads
     taa.dispose();
     input.dispose();
     target.dispose();
+  }
+});
+
+test("jitter phase count grows with the upscale ratio squared, FSR's 8 * ratio^2", () => {
+  assert.equal(jitterPhaseCount(8, 1), 8);
+  assert.equal(jitterPhaseCount(8, 0.5), 32);
+  assert.equal(jitterPhaseCount(8, 1 / 1.5), 18);
+  assert.equal(jitterPhaseCount(16, 1), 16);
+});
+
+test("upscaling: render size, input scale, phases and jitter in render pixels", () => {
+  const taa = makeTaa({ jitterScale: 1 });
+  try {
+    taa.setSize(200, 100);
+    assert.equal(taa.upscaling, false);
+    assert.equal(taa.inputScale, 1);
+    assert.equal(taa.jitterPhases, 8);
+
+    taa.setSize(200, 100, 100, 50);
+    assert.equal(taa.upscaling, true);
+    assert.equal(taa.renderWidth, 100);
+    assert.equal(taa.renderHeight, 50);
+    assert.equal(taa.inputScale, 0.5);
+    assert.equal(taa.jitterPhases, 32);
+    assert.equal(taa.historyValid, false);
+
+    // The projection offset is one jitter step in render pixels, not output pixels
+    const camera = taa.camera as PerspectiveCamera;
+    const before = camera.projectionMatrix.elements[8];
+    taa.beginFrame();
+    const { x } = jitterOffsetForFrame(0, 32, 1);
+    assert.ok(Math.abs(camera.projectionMatrix.elements[8] - before - (2 * x) / 100) < 1e-9);
+    taa.endFrame();
+
+    // Render sizes larger than the output clamp to it
+    taa.setSize(200, 100, 400, 400);
+    assert.equal(taa.upscaling, false);
+    assert.equal(taa.renderWidth, 200);
+  } finally {
+    taa.dispose();
+  }
+});
+
+test("upscaling WGSL variant materializes its cross-branch expressions and reads render-sized inputs", () => {
+  const { taa, target, input, source } = buildTemporalAAWGSL({ renderWidth: 10, renderHeight: 7 });
+  try {
+    assert.match(source, /@location\( 2 \) m2 : vec4<f32>/);
+    const depths = wgslVariableDepths(source);
+    for (const name of ["taaCurrent", "taaCurrentSmooth", "taaNearestConfidence", "taaRenderBase", "taaBaseOffset",
+      "taaTarget", "taaKernel", "taaMotionData", "taaHistoryUv", "taaRawHistory", "taaResolvedHistory", "taaLockWeight"]) {
+      const { assignments, reads } = depths(name);
+      assert.ok(assignments.length > 0, `${name} has no assignment in generated WGSL`);
+      assert.ok(reads.length > 0, `${name} has no read in generated WGSL`);
+      const firstAssignment = assignments.reduce((a, b) => a.line < b.line ? a : b);
+      const firstRead = reads.reduce((a, b) => a.line < b.line ? a : b);
+      assert.ok(firstAssignment.line < firstRead.line, `${name} is read before its first assignment`);
+      assert.ok(firstAssignment.depth <= Math.min(...reads.map((read) => read.depth)),
+        `${name} is assigned deeper than it is read`);
+    }
+  } finally {
+    taa.dispose();
+    input.dispose();
+    target.dispose();
+  }
+});
+
+const MODERN = { neighbourhood: 9, clipTowardsCurrent: true, depthRejection: true, motionRejection: true,
+  thinFeatureLocks: true, edgeAdaptiveBlend: true, sampleConfidence: true, lockFrames: 4, lockMaxSpeed: 12, blend: 0.15 };
+
+test("specialized materials are cached per setting combination and can be switched off", () => {
+  const taa = makeTaa(MODERN) as any;
+  try {
+    taa.setSize(32, 16);
+    assert.equal(taa.specializeShader, true);
+    const a = taa._selectMaterial();
+    assert.notEqual(a, taa.material);
+    assert.equal(taa._selectMaterial(), a, "same settings reuse the compiled variant");
+    taa.blend = 0.3; taa.varianceGamma = 1.5; taa.depthTolerance = 0.01;
+    assert.equal(taa._selectMaterial(), a, "continuous settings stay uniforms");
+    taa.boxMode = "minmax";
+    const b = taa._selectMaterial();
+    assert.notEqual(b, a, "a discrete setting selects another variant");
+    taa.boxMode = "variance";
+    assert.equal(taa._selectMaterial(), a);
+    taa.setSize(32, 16, 16, 8);
+    assert.notEqual(taa._selectMaterial(), a, "upscaling has its own variants");
+    taa.specializeShader = false;
+    assert.equal(taa._selectMaterial(), taa._upscaleMaterial);
+    taa.setSize(32, 16);
+    assert.equal(taa._selectMaterial(), taa.material);
+  } finally {
+    taa.dispose();
+  }
+});
+
+test("specialized modern WGSL materializes every cross-branch expression before its reads", () => {
+  for (const renderSize of [{ renderWidth: 19, renderHeight: 13 }, { renderWidth: 10, renderHeight: 7 }]) {
+    const { taa, target, input, source } = buildTemporalAAWGSL({ ...renderSize, options: MODERN, specialized: true });
+    try {
+      const depths = wgslVariableDepths(source);
+      for (const name of ["taaCurrent", "taaCurrentDepth", "taaMotionData", "taaHistoryUv", "taaVelocityPixels",
+        "taaLockWeight", "taaTrusted", "taaStoredState", "taaGamma", "taaRawHistory", "taaResolvedHistory"]) {
+        const { assignments, reads } = depths(name);
+        assert.ok(assignments.length > 0 && reads.length > 0, `${name} missing in specialized WGSL`);
+        const firstAssignment = assignments.reduce((a, b) => a.line < b.line ? a : b);
+        const firstRead = reads.reduce((a, b) => a.line < b.line ? a : b);
+        assert.ok(firstAssignment.line < firstRead.line, `${name} is read before its first assignment`);
+        assert.ok(firstAssignment.depth <= Math.min(...reads.map((read) => read.depth)), `${name} assigned too deep`);
+      }
+    } finally {
+      taa.dispose();
+      input.dispose();
+      target.dispose();
+    }
   }
 });

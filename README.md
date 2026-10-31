@@ -48,6 +48,10 @@ Additional contribution to @monogrid/gainmap-js which made it compatible with we
 
 For GPU measurements, run `npm run dev`, open `/monk-viewer/aa-lab.html?fixed=1&smaa=0` (the deployed copy is at `https://arecsu.github.io/monk-viewer/aa-lab.html`), choose **still** motion and use the browser console. `fixed=1` pins the deterministic 900×600 @1x framebuffer the numbers here assume; without it the lab fills the viewport at the device pixel ratio.
 
+`aa-lab-pickets.html` is the same lab on the test scene of pmndrs/upscaler's [FSR1 vs FSR3 example](https://pmndrs.github.io/upscaler/02-fsr1-vs-fsr3/) (thin pickets, a spinning metal knot, a high-frequency grid floor; same camera, auto orbit and DPR cap of 2), so our TAA/MSAA/SMAA can be compared side by side with that page. The panel's **benchmark** button pauses the loop, renders frames back to back and drains the GPU queue: the frame cost without vsync, on either backend. Live GPU timestamps are not used because on Apple GPUs the per-pass timestamps overlap and do not add up to a frame time.
+
+Both labs have a **Temporal upscaling** section (native WebGPU only): the geometry and glass render at a fraction of the output (FSR's 1.5×/1.7×/2×/3× ratios or the slider) and TAA reconstructs the output-resolution history from them. Each frame's samples are weighted by their sub-pixel distance in output pixels and its contribution by how close its nearest sample lands (`min weight` is the floor), the jitter cycle grows to FSR's 8 × ratio² phases, and pixels without usable history fall back to a bilinear upscale. The native TAA keeps its own unchanged shader; see `docs/webgpu-performance.md` for what upscaling does and doesn't save in this pipeline.
+
 ```js
 const checks = await import('/monk-viewer/tests/taa-browser.js');
 console.table(await checks.validateTaa(window.mgr, window.THREE));

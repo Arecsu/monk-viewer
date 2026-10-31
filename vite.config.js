@@ -60,6 +60,7 @@ export default defineConfig({
         main: path.resolve(import.meta.dirname, "index.html"),
         // Dev-only tuning page, also built so it is reachable on the deployed site
         "aa-lab": path.resolve(import.meta.dirname, "aa-lab.html"),
+        "aa-lab-pickets": path.resolve(import.meta.dirname, "aa-lab-pickets.html"),
       },
       output: {
         entryFileNames: (chunkInfo) => {

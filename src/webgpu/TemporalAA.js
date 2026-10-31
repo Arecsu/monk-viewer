@@ -6,7 +6,7 @@ import * as TSL from 'three/tsl';
 import { Box3, Matrix4, Vector2, Vector4 } from 'three';
 import { webglProjection } from './Common.js';
 import { TemporalAABounds } from '../postprocessing/TemporalAABounds.ts';
-import { createTemporalAAMaterial } from './TemporalAAShader.js';
+import { createTemporalAAMaterial, SPECIALIZED_SETTINGS } from './TemporalAAShader.js';
 
 const BOX_MODES = ['variance', 'minmax', 'intersection'];
 const FULL_SCREEN = new Vector4(0, 0, 1, 1);
@@ -43,6 +43,19 @@ export function jitterOffsetForFrame(frame, samples, scale) {
     x: (halton(index, 2) - 0.5) * scale,
     y: (halton(index, 3) - 0.5) * scale
   };
+}
+
+/**
+ * Jitter positions per cycle. Upscaling spreads the same per-pixel coverage over more output pixels, so the cycle grows
+ * with the pixel ratio squared (FidelityFX `ffxFsr2GetJitterPhaseCount`: 8 * ratio^2 for the default 8 samples).
+ *
+ * @param {number} samples - Positions per cycle at native resolution.
+ * @param {number} inputScale - Render size / output size, 1 when not upscaling.
+ * @returns {number} Positions per cycle.
+ */
+export function jitterPhaseCount(samples, inputScale) {
+  const base = Math.max(1, Math.floor(samples));
+  return inputScale >= 1 ? base : Math.ceil(base / (inputScale * inputScale));
 }
 
 /**
@@ -189,7 +202,8 @@ export class WebGpuTemporalAA {
       reactiveStrength = 1.0,
       velocityBuffer = null,
       enabled = true,
-      debugView = 0
+      debugView = 0,
+      specializeShader = true
     } = options;
 
     this.renderer = renderer;
@@ -235,6 +249,12 @@ export class WebGpuTemporalAA {
       objectMotion: TSL.uniform(new Matrix4()),
       texelSize: TSL.uniform(new Vector2(1, 1)),
       size: TSL.uniform(new Vector2(1, 1)),
+      // Temporal upscaling: the current frame (color, depth, velocity, reactive mask) is renderSize, the history and the
+      // outputs are size. inputScale = renderSize / size; all three equal the output when not upscaling.
+      renderTexelSize: TSL.uniform(new Vector2(1, 1)),
+      renderSize: TSL.uniform(new Vector2(1, 1)),
+      inputScale: TSL.uniform(1.0),
+      upscaleConfidenceFloor: TSL.uniform(0.05),
       jitterOffset: TSL.uniform(new Vector2()),
       previousJitter: TSL.uniform(new Vector2()),
       backgroundBounds: TSL.uniform(new Vector4(0, 0, 1, 1))
@@ -260,6 +280,8 @@ export class WebGpuTemporalAA {
 
     this._width = 1;
     this._height = 1;
+    this._renderWidth = 1;
+    this._renderHeight = 1;
     this._frame = 0;
     this._stillFrames = 0;
     this._historyValid = false;
@@ -291,7 +313,13 @@ export class WebGpuTemporalAA {
     this._currentBounds = new Vector4();
     this._previousBounds = new Vector4(0, 0, 1, 1);
 
+    // All settings as uniforms: used when specializeShader is off
     this.material = createTemporalAAMaterial(this._uniforms, this._textureNodes);
+    // Temporal upscaling variant of it, built the first time the inputs are smaller than the output
+    this._upscaleMaterial = null;
+    // Specialized materials by setting combination, built on first use (a pipeline compile, a one-off hitch)
+    this._specialize = specializeShader;
+    this._variants = new Map();
     this._quad = new GPU.QuadMesh(this.material);
 
     // Native material; the uniform view keeps aa-lab's reference tuning panel working without a GLSL material.
@@ -311,6 +339,35 @@ export class WebGpuTemporalAA {
 
   /** Physical render height in pixels. */
   get height() { return this._height; }
+
+  /** Width of the current-frame inputs: the output width, or less when upscaling. */
+  get renderWidth() { return this._renderWidth; }
+
+  /** Height of the current-frame inputs: the output height, or less when upscaling. */
+  get renderHeight() { return this._renderHeight; }
+
+  /** Render size / output size, 1 when not upscaling. */
+  get inputScale() { return this._uniforms.inputScale.value; }
+
+  /**
+   * Bakes the discrete settings into the shader (see SPECIALIZED_SETTINGS) instead of branching on uniforms. Same
+   * output, less GPU time; each new combination compiles once.
+   */
+  get specializeShader() { return this._specialize; }
+  set specializeShader(value) { this._specialize = Boolean(value); }
+
+  /** Whether the current-frame inputs are smaller than the output, i.e. TAA upscales. */
+  get upscaling() { return this._renderWidth !== this._width || this._renderHeight !== this._height; }
+
+  /** Jitter positions per cycle at the current input scale. */
+  get jitterPhases() { return jitterPhaseCount(this._jitterSamples, this.inputScale); }
+
+  /**
+   * The least a current sample far from every output pixel centre still contributes while upscaling, as a fraction of
+   * the blend. Low keeps detail sharp, high reacts faster but shows the render pixel grid in motion.
+   */
+  get upscaleConfidenceFloor() { return this._uniforms.upscaleConfidenceFloor.value; }
+  set upscaleConfidenceFloor(value) { this._uniforms.upscaleConfidenceFloor.value = value; }
 
   /** The number of still frames accumulated by static convergence. */
   get stillFrames() { return this._stillFrames; }
@@ -488,10 +545,11 @@ export class WebGpuTemporalAA {
       return { projection: this._projection };
     }
 
-    const { x, y } = jitterOffsetForFrame(this._frame, this._jitterSamples, this._jitterScale);
+    // The jitter is in render pixels: the projection offsets the image the geometry is rendered at.
+    const { x, y } = jitterOffsetForFrame(this._frame, this.jitterPhases, this._jitterScale);
     const elements = camera.projectionMatrix.elements;
-    elements[8] += (2.0 * x) / this._width;
-    elements[9] += (2.0 * y) / this._height;
+    elements[8] += (2.0 * x) / this._renderWidth;
+    elements[9] += (2.0 * y) / this._renderHeight;
     camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
 
     this._uniforms.previousJitter.value.copy(this._jitter);
@@ -588,6 +646,8 @@ export class WebGpuTemporalAA {
     this._textureNodes.history.value = historyRead.textures[0];
     this._textureNodes.state.value = historyRead.textures[2];
 
+    this._quad.material = this._selectMaterial();
+
     const renderer = this.renderer;
     const previousTarget = renderer.getRenderTarget();
     const previousMRT = renderer.getMRT?.() ?? null;
@@ -611,21 +671,33 @@ export class WebGpuTemporalAA {
   }
 
   /**
-   * Physical render size. Reallocates history only when the integer size changes and invalidates history/bounds.
+   * Physical output size, and the size of the current-frame inputs when upscaling. Reallocates history only when the
+   * integer size changes and invalidates history/bounds.
    *
-   * @param {number} width - Physical width.
-   * @param {number} height - Physical height.
+   * @param {number} width - Physical output width: history, output and state.
+   * @param {number} height - Physical output height.
+   * @param {number} [renderWidth=width] - Width of the color/depth/velocity/reactive inputs; smaller to upscale.
+   * @param {number} [renderHeight=height] - Height of the inputs.
    */
-  setSize(width, height) {
+  setSize(width, height, renderWidth = width, renderHeight = height) {
     if (this._disposed) return;
     const w = Math.max(1, Math.floor(width));
     const h = Math.max(1, Math.floor(height));
-    if (w === this._width && h === this._height) return;
+    const rw = Math.min(Math.max(1, Math.floor(renderWidth)), w);
+    const rh = Math.min(Math.max(1, Math.floor(renderHeight)), h);
+    if (w === this._width && h === this._height && rw === this._renderWidth && rh === this._renderHeight) return;
+    if (w !== this._width || h !== this._height) this._targets.forEach((target) => target.setSize(w, h));
     this._width = w;
     this._height = h;
-    this._targets.forEach((target) => target.setSize(w, h));
-    this._uniforms.size.value.set(w, h);
-    this._uniforms.texelSize.value.set(1.0 / w, 1.0 / h);
+    this._renderWidth = rw;
+    this._renderHeight = rh;
+    const uniform = this._uniforms;
+    uniform.size.value.set(w, h);
+    uniform.texelSize.value.set(1.0 / w, 1.0 / h);
+    uniform.renderSize.value.set(rw, rh);
+    uniform.renderTexelSize.value.set(1.0 / rw, 1.0 / rh);
+    // One scale for both axes: the pipeline scales both by the same ratio, rounding aside
+    uniform.inputScale.value = rw === w && rh === h ? 1.0 : rw / w;
     this.reset();
   }
 
@@ -654,8 +726,9 @@ export class WebGpuTemporalAA {
       // Box3 includes the glass even though it doesn't write depth. Recompute from cached geometry boxes so child
       // transforms and camera motion stay covered.
       this._worldBounds.setFromObject(object);
+      // Padding in output pixels; the jitter and the reconstruction footprint are render pixels.
       this._boundsProjector.project(this._worldBounds, this._viewProjection, this._width, this._height,
-        3 + Math.abs(this._jitterScale), bounds);
+        (3 + Math.abs(this._jitterScale)) / this.inputScale, bounds);
     }
 
     const output = this.backgroundBounds;
@@ -669,6 +742,28 @@ export class WebGpuTemporalAA {
     }
   }
 
+  /** The material for the current settings and input size. */
+  _selectMaterial() {
+    const upscale = this.upscaling;
+    if (!this._specialize) {
+      if (!upscale) return this.material;
+      this._upscaleMaterial ??= createTemporalAAMaterial(this._uniforms, this._textureNodes, { upscale: true });
+      return this._upscaleMaterial;
+    }
+    const constants = {};
+    for (const [name, type] of Object.entries(SPECIALIZED_SETTINGS)) {
+      const value = this._uniforms[name].value;
+      constants[name] = type === 'bool' ? Boolean(value) : Number(value);
+    }
+    const key = `${upscale ? 'upscale' : 'native'}:${Object.values(constants).map(Number).join(',')}`;
+    let material = this._variants.get(key);
+    if (!material) {
+      material = createTemporalAAMaterial(this._uniforms, this._textureNodes, { upscale, constants });
+      this._variants.set(key, material);
+    }
+    return material;
+  }
+
   /** Releases targets, the material and the fallback texture. Idempotent. */
   dispose() {
     if (this._disposed) return;
@@ -676,6 +771,9 @@ export class WebGpuTemporalAA {
     this._disposed = true;
     this._targets.forEach((target) => target.dispose());
     this.material.dispose();
+    this._upscaleMaterial?.dispose();
+    for (const material of this._variants.values()) material.dispose();
+    this._variants.clear();
     this._black.dispose();
   }
 

@@ -30,6 +30,9 @@ export class WebGpuPipeline {
     this.width = 1;
     this.height = 1;
     this.pixelRatio = renderer.getPixelRatio();
+    // Temporal upscaling: the geometry and glass render at this fraction of the output, TAA reconstructs the output
+    // from them. 1 renders at the output resolution.
+    this._renderScale = 1;
     this.disposed = false;
     this.frame = 0;
     this.latest = null;
@@ -156,11 +159,25 @@ export class WebGpuPipeline {
   get pixelWidth() { return Math.max(1, Math.floor(this.width * this.pixelRatio)); }
   get pixelHeight() { return Math.max(1, Math.floor(this.height * this.pixelRatio)); }
 
+  /** Fraction of the output resolution the scene is rendered at, (0, 1]; below 1 TAA upscales. */
+  get renderScale() { return this._renderScale; }
+  set renderScale(value) {
+    const scale = Math.min(Math.max(Number(value) || 1, 0.25), 1);
+    if (scale === this._renderScale) return;
+    this._renderScale = scale;
+    this.resize();
+  }
+
+  /** Size the geometry and glass render at: the output size, scaled by {@link renderScale}. */
+  get renderWidth() { return Math.max(1, Math.round(this.pixelWidth * this._renderScale)); }
+  get renderHeight() { return Math.max(1, Math.round(this.pixelHeight * this._renderScale)); }
+
   resize() {
     const width = this.pixelWidth, height = this.pixelHeight;
-    this.geometry.setSize(width, height);
-    this.transparency.setSize(width, height);
-    this.taa.setSize(width, height);
+    const renderWidth = this.renderWidth, renderHeight = this.renderHeight;
+    this.geometry.setSize(renderWidth, renderHeight);
+    this.transparency.setSize(renderWidth, renderHeight);
+    this.taa.setSize(width, height, renderWidth, renderHeight);
     this.motionBlur.setSize(width, height);
     this.postColor.setSize(width, height);
     this.resetHistory();
@@ -246,6 +263,7 @@ export class WebGpuPipeline {
       backend: renderer.backend.isWebGPUBackend ? 'webgpu' : 'INVALID-FALLBACK',
       frame: this.frame,
       size: [this.pixelWidth, this.pixelHeight],
+      renderSize: [this.renderWidth, this.renderHeight],
       samples: this.geometry.samples,
       depthPolicy: 'sample-0',
       attachments: target.textures.map(info),
