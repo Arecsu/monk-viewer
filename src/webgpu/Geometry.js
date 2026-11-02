@@ -267,8 +267,15 @@ function createMaterialClasses(specularAA, grazingClamp) {
 
     setupVariants(builder) {
       super.setupVariants(builder);
+      // three's getRoughness floors roughness at 0.0525 ("the base mip of a 256 cubemap"), so a smooth surface
+      // never samples the PMREM above its 256px level whatever the environment resolution: the glass reflection
+      // came out as a blocky, bilinearly magnified 256px image. The scene has no punctual lights (the floor's other
+      // job, avoiding zero-width GGX highlights), so the glass layer gets its real roughness back.
+      let rough = T.roughness;
+      if (this.transparent)
+        rough = (this.roughnessNode ? T.float(this.roughnessNode) : T.materialRoughness).clamp(0, 1);
       // Equal to the reference patch: only ever makes surfaces rougher, normal maps included.
-      T.roughness.assign(specularAA.filter(T.roughness, T.normalView));
+      T.roughness.assign(specularAA.filter(rough, T.normalView));
       if (this.useClearcoat) T.clearcoatRoughness.assign(specularAA.filter(T.clearcoatRoughness, T.clearcoatNormalView));
     }
 
