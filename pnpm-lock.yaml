@@ -4,22 +4,25 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  three@0.186.1: 35afdd5d1300337e9b7f7b0ff67771534e125c446f065404626e3c9bbc0b5ebd
+
 importers:
 
   .:
     dependencies:
       '@monogrid/gainmap-js':
         specifier: 3.7.2
-        version: 3.7.2(three@0.186.1)
+        version: 3.7.2(three@0.186.1(patch_hash=35afdd5d1300337e9b7f7b0ff67771534e125c446f065404626e3c9bbc0b5ebd))
       js-easing-functions:
         specifier: ^1.0.3
         version: 1.0.3
       postprocessing:
         specifier: 7.0.0-beta.16
-        version: 7.0.0-beta.16(three@0.186.1)
+        version: 7.0.0-beta.16(three@0.186.1(patch_hash=35afdd5d1300337e9b7f7b0ff67771534e125c446f065404626e3c9bbc0b5ebd))
       three:
         specifier: ^0.186.1
-        version: 0.186.1
+        version: 0.186.1(patch_hash=35afdd5d1300337e9b7f7b0ff67771534e125c446f065404626e3c9bbc0b5ebd)
     devDependencies:
       '@types/three':
         specifier: ^0.186.0
@@ -665,10 +668,10 @@ snapshots:
 
   '@dimforge/rapier3d-compat@0.12.0': {}
 
-  '@monogrid/gainmap-js@3.7.2(three@0.186.1)':
+  '@monogrid/gainmap-js@3.7.2(three@0.186.1(patch_hash=35afdd5d1300337e9b7f7b0ff67771534e125c446f065404626e3c9bbc0b5ebd))':
     dependencies:
       promise-worker-transferable: 1.0.4
-      three: 0.186.1
+      three: 0.186.1(patch_hash=35afdd5d1300337e9b7f7b0ff67771534e125c446f065404626e3c9bbc0b5ebd)
 
   '@nodelib/fs.scandir@2.1.5':
     dependencies:
@@ -1027,9 +1030,9 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.2
 
-  postprocessing@7.0.0-beta.16(three@0.186.1):
+  postprocessing@7.0.0-beta.16(three@0.186.1(patch_hash=35afdd5d1300337e9b7f7b0ff67771534e125c446f065404626e3c9bbc0b5ebd)):
     dependencies:
-      three: 0.186.1
+      three: 0.186.1(patch_hash=35afdd5d1300337e9b7f7b0ff67771534e125c446f065404626e3c9bbc0b5ebd)
 
   promise-worker-transferable@1.0.4:
     dependencies:
@@ -1075,7 +1078,7 @@ snapshots:
     dependencies:
       escape-string-regexp: 1.0.5
 
-  three@0.186.1: {}
+  three@0.186.1(patch_hash=35afdd5d1300337e9b7f7b0ff67771534e125c446f065404626e3c9bbc0b5ebd): {}
 
   tinyglobby@0.2.17:
     dependencies:

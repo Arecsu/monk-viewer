@@ -1,21 +1,4 @@
-import { Material, Object3D, ShaderChunk, Uniform, WebGLProgramParametersWithUniforms, WebGLRenderer } from "three";
-
-/**
- * three's lights_physical_fragment floors roughness at 0.0525 ("the base mip of a 256 cubemap"), so a smooth surface
- * never samples the PMREM above its 256px level whatever the environment resolution: the glass reflection came out as
- * a blocky, bilinearly magnified 256px image. The scene has no punctual lights (the floor's other job, avoiding
- * zero-width GGX highlights), so the transparent glass layer gets its real roughness back. Same as the WebGPU path
- * (webgpu/Geometry.js). Opaque materials keep the floor.
- */
-
-const ROUGHNESS_FLOOR = "material.roughness = max( roughnessFactor, 0.0525 );";
-const UNFLOORED_LIGHTS_PHYSICAL = ShaderChunk.lights_physical_fragment.replace(ROUGHNESS_FLOOR, "material.roughness = roughnessFactor;");
-
-if(UNFLOORED_LIGHTS_PHYSICAL === ShaderChunk.lights_physical_fragment) {
-
-    console.warn("SpecularAntialiasing: three's roughness floor not found in lights_physical_fragment, the glass keeps it");
-
-}
+import { Material, Object3D, Uniform, WebGLProgramParametersWithUniforms, WebGLRenderer } from "three";
 
 /**
  * SpecularAntialiasing options.
@@ -141,10 +124,6 @@ export class SpecularAntialiasing {
 
             }
 
-            // Transparent materials (the glass layer) without three's roughness floor, see UNFLOORED_LIGHTS_PHYSICAL.
-            // `transparent` is part of the program cache key (OPAQUE), so opaque materials never share this program.
-            const lights = material.transparent ? UNFLOORED_LIGHTS_PHYSICAL : "#include <lights_physical_fragment>";
-
             shader.uniforms.specularAAStrength = this.strengthUniform;
             shader.uniforms.specularAAVariance = this.varianceUniform;
             shader.uniforms.specularAAThreshold = this.thresholdUniform;
@@ -163,7 +142,7 @@ export class SpecularAntialiasing {
                 "}\n" +
                 shader.fragmentShader.replace(
                     "#include <lights_physical_fragment>",
-                    () => `${lights}
+                    `#include <lights_physical_fragment>
 					if(specularAAStrength > 0.0) {
 
 						// The shading normal, normal maps included: their variance aliases the same way
