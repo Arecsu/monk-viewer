@@ -514,7 +514,7 @@ test("exposure, encoding, samples and the AA settings stay mutable at runtime", 
 
     // Edge reflections: on by default, uniforms so they change at runtime.
     const edge = geometry.edgeReflections;
-    assert.deepEqual([edge.correctNormals, edge.minNdotV, edge.backgroundMatch, edge.width], [true, 0.02, 1, 0.18]);
+    assert.deepEqual([edge.correctNormals, edge.minNdotV, edge.backgroundMatch, edge.width], [true, 0.235, 1, 0.18]);
     edge.correctNormals = true;
     edge.minNdotV = 0.05;
     edge.backgroundMatch = 0.8;

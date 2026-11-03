@@ -282,7 +282,7 @@ class GrazingSpecularClamp {
 class EdgeReflections {
 
   // Defaults tuned in the AA lab: all on, full match, ground glass edges fully rough
-  constructor({ correctNormals = true, minNdotV = 0.02, backgroundMatch = 1, width = 0.18,
+  constructor({ correctNormals = true, minNdotV = 0.235, backgroundMatch = 1, width = 0.18,
     groundGlassEdges = true, glassEdgeRoughness = 1 } = {}) {
     this._groundEdges = T.uniform(groundGlassEdges ? 1 : 0);
     // 1 while the environment is drawn as the background: a grazing reflection then already matches it
