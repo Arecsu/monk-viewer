@@ -303,7 +303,9 @@ export class ThreeSceneManager {
 	}
 
 	setupCamera() {
-		this.camera = new THREE.PerspectiveCamera(50, 2, 0.03, 100)
+		// Near plane small enough for the closest zoom (min-distance 0.3) with the pane tilted towards the camera; the
+		// depth buffer is 32-bit float, so it still resolves ~0.01 mm at the model
+		this.camera = new THREE.PerspectiveCamera(50, 2, 0.005, 100)
 		console.log(this.baseCameraSettings.multiplier)
 		this.camera.position.z = this.baseCameraSettings.targetDistance * this.baseCameraSettings.multiplier
 		// this.camera.rotation.y = Math.PI * 0.5;
