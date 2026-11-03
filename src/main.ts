@@ -225,6 +225,9 @@ class MonkView extends HTMLElement {
     startup: string;
     smaa: boolean;
     grazingSpecularClamp: boolean;
+    environmentBackground: boolean;
+    environmentBackgroundBlurriness: number;
+    environmentBackgroundIntensity: number;
     perfSampling: {
       stabilityDuration: number;
       measureDuration: number;
@@ -294,6 +297,9 @@ class MonkView extends HTMLElement {
       startup,
       smaa: this.getAttribute("smaa") === "true",
       grazingSpecularClamp: this.getAttribute("grazing-specular-clamp") === "true",
+      environmentBackground: this.getAttribute("environment-background") === "true",
+      environmentBackgroundBlurriness: parseFloat(this.getAttribute("environment-background-blur") ?? "0") || 0,
+      environmentBackgroundIntensity: parseFloat(this.getAttribute("environment-background-intensity") ?? "1") || 1,
       perfSampling
     };
   }

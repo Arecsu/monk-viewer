@@ -57,6 +57,12 @@ export class ThreeSceneManager {
 		// Widens the roughness where the normal varies within a pixel, the prefiltered alternative to the grazing clamp.
 		// Always compiled in, specularAA.enabled toggles it at runtime.
 		this.specularAA = new SpecularAntialiasing({ enabled: data.specularAntialiasing ?? true })
+		// Shows the environment map as the background instead of black (native WebGPU only, see
+		// WebGpuGeometry's background). setEnvironmentBackground() toggles it at runtime. Blurriness is the PMREM
+		// level (0 sharp, 1 the most blurred), intensity scales it.
+		this.environmentBackground = data.environmentBackground ?? false
+		this.environmentBackgroundBlurriness = data.environmentBackgroundBlurriness ?? 0
+		this.environmentBackgroundIntensity = data.environmentBackgroundIntensity ?? 1
 		// Motion blur from TAA's per-pixel motion; motionBlurPass.enabled toggles it at runtime
 		this.motionBlur = data.motionBlur ?? true
 		this.motionBlurPass = null
@@ -317,7 +323,20 @@ export class ThreeSceneManager {
 	setupScene() {
 		this.scene = new THREE.Scene()
 		this.scene.background = new THREE.Color(0x000000)
-		// this.scene.background = new THREE.Color(0xFFFFFF);
+		this.scene.backgroundBlurriness = this.environmentBackgroundBlurriness
+		this.scene.backgroundIntensity = this.environmentBackgroundIntensity
+	}
+
+	/**
+	 * Shows the environment map as the background, or black. Native WebGPU only: the WebGL reference's geometry pass
+	 * can't encode a texture background, so it stays black there. With a texture background TAA and bloom give up
+	 * their black-background bounds and work full screen.
+	 */
+	setEnvironmentBackground(enabled) {
+		this.environmentBackground = Boolean(enabled)
+		const show = this.environmentBackground && this.backendStatus.selected === 'webgpu' && this.scene.environment
+		this.scene.background = show ? this.scene.environment : new THREE.Color(0x000000)
+		this.taa?.reset()
 	}
 
 	setupLighting() {
@@ -677,6 +696,7 @@ export class ThreeSceneManager {
 			if (this.disposed) { resource.dispose(); return }
 			this.environmentResource = resource
 			this.scene.environment = resource.texture
+			if (this.environmentBackground) this.setEnvironmentBackground(true)
 			if (this.model) optimizeWebGpuTextures?.(this.renderer, this.model)
 			return
 		}

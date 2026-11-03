@@ -267,7 +267,11 @@ export function createTemporalAAMaterial(uniforms, textures, { upscale = false, 
       current.w
     );
 
-    return select(surfaceDepth.greaterThanEqual(1.0), vec4(uv.x, uv.y, 0.0, 0.0),
+    // The background stays put unless the geometry pass drew one with motion (the environment background): its
+    // velocity is the camera's rotation, and the cleared velocity is 0 otherwise. Its depth stays 0 either way.
+    const background = select(useVelocityBuffer, vec4(uv.x.sub(velocitySample.x), uv.y.sub(velocitySample.y), 0.0, 0.0),
+      vec4(uv.x, uv.y, 0.0, 0.0));
+    return select(surfaceDepth.greaterThanEqual(1.0), background,
       select(useVelocityBuffer, withVelocity, withObjectMotion));
   });
 

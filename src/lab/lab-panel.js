@@ -86,6 +86,11 @@ const panelMarkup = (title, motion) => `
     <div class="toggles" id="blur-toggles"></div>
     <div id="blur"></div>
 
+    <h2>Background</h2>
+    <div class="toggles" id="background-toggles"></div>
+    <div class="note">The environment map instead of black (native WebGPU only). TAA and bloom then work full screen, and the background match switches itself off.</div>
+    <div id="background"></div>
+
     <h2>Specular AA</h2>
     <div id="specular"></div>
 
@@ -445,6 +450,19 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 			}],
 	]
 
+	// Environment background, native WebGPU only
+	const nativeBackend = () => mgr.backendStatus?.selected === "webgpu"
+	const backgroundToggles = [
+		["envBackground", "environment background", () => !!mgr.scene.background?.isTexture,
+			(v) => mgr.setEnvironmentBackground(v)],
+	]
+	sliders.push(
+		["background", "backgroundBlur", "blur", 0, 1, 0.01, 2,
+			() => mgr.scene.backgroundBlurriness ?? 0, (v) => { mgr.scene.backgroundBlurriness = v }],
+		["background", "backgroundIntensity", "intensity", 0, 3, 0.01, 2,
+			() => mgr.scene.backgroundIntensity ?? 1, (v) => { mgr.scene.backgroundIntensity = v }],
+	)
+
 	// Edge reflections (Geometry.js EdgeReflections), native WebGPU only
 	const edge = () => mgr.edgeReflections ?? null
 	let edgeMatchBackup = 1
@@ -566,6 +584,8 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 		msaa: mgr.geometryPass.samples,
 		specularAntialiasing: { enabled: mgr.specularAA.enabled, variance: mgr.specularAA.variance, threshold: mgr.specularAA.threshold },
 		grazingSpecularClamp: mgr.grazingClamp.enabled,
+		environmentBackground: { enabled: !!mgr.scene.background?.isTexture, blurriness: mgr.scene.backgroundBlurriness,
+			intensity: mgr.scene.backgroundIntensity },
 		edgeReflections: edge() && { correctNormals: edge().correctNormals, minNdotV: edge().minNdotV,
 			backgroundMatch: edge().backgroundMatch, width: edge().width,
 			groundGlassEdges: edge().groundGlassEdges, glassEdgeRoughness: edge().glassEdgeRoughness },
@@ -614,6 +634,7 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 		// Native WebGPU only
 		toggleButtons.get("specialize").button.disabled = !("specializeShader" in t)
 		for (const [key] of edgeToggles) toggleButtons.get(key).button.disabled = !edge()
+		toggleButtons.get("envBackground").button.disabled = !nativeBackend()
 		for (const slider of motionSliders) {
 			$(`motion-${slider.id}-out`).textContent = slider.format(motionState[slider.id])
 			$(`motion-${slider.id}`).value = motionState[slider.id]
@@ -624,6 +645,7 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 			if (document.activeElement !== input) input.value = value
 			if (key.startsWith("upscale")) input.disabled = !canUpscale()
 			if (key.startsWith("edge")) input.disabled = !edge()
+			if (key.startsWith("background")) input.disabled = !nativeBackend()
 			output.textContent = key === "resolution" ? `${value.toFixed(2)}×` :
 				(decimals === 0 ? String(Math.round(value)) : value.toFixed(decimals))
 		}
@@ -651,6 +673,7 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 		toneMappingToggles.forEach((t) => createToggle(t, "tonemapping-toggles"))
 		blurToggles.forEach((t) => createToggle(t, "blur-toggles"))
 		edgeToggles.forEach((t) => createToggle(t, "edge-toggles"))
+		backgroundToggles.forEach((t) => createToggle(t, "background-toggles"))
 		performanceToggles.forEach((t) => createToggle(t, "performance-toggles"))
 		sliders.forEach(createSlider)
 

@@ -273,6 +273,9 @@ class GrazingSpecularClamp {
  *   reflection towards the visible background (black) as the reflection direction approaches the view ray. That only
  *   happens at grazing angles, so the faces seen head on and at moderate angles are unchanged.
  *
+ * With the environment shown as the background (see WebGpuGeometry's background), the grazing reflection already
+ * matches the pixels around it and the background match switches itself off.
+ *
  * Not physically based: the model is lit by a world the camera doesn't show. Uniforms, so they change without a
  * recompile; all on by default.
  */
@@ -282,6 +285,8 @@ class EdgeReflections {
   constructor({ correctNormals = true, minNdotV = 0.02, backgroundMatch = 1, width = 0.18,
     groundGlassEdges = true, glassEdgeRoughness = 1 } = {}) {
     this._groundEdges = T.uniform(groundGlassEdges ? 1 : 0);
+    // 1 while the environment is drawn as the background: a grazing reflection then already matches it
+    this._backgroundVisible = T.uniform(0);
     this._edgeRoughness = T.uniform(glassEdgeRoughness);
     this._correct = T.uniform(correctNormals ? 1 : 0);
     this._minNdotV = T.uniform(minNdotV);
@@ -387,7 +392,7 @@ class EdgeReflections {
     const reflected = T.reflect(view.negate(), T.normalView);
     const alignment = reflected.dot(view.negate());
     const grazing = T.smoothstep(T.float(1).sub(this._width), 1, alignment);
-    return T.float(1).sub(grazing.mul(this._match));
+    return T.float(1).sub(grazing.mul(this._match).mul(T.float(1).sub(this._backgroundVisible)));
   }
 
 }
@@ -413,6 +418,41 @@ function createVelocityNode(viewProjection, previousViewProjection, currentModel
   const previousClip = T.varying(previousViewProjection.mul(previousModel).mul(localPosition));
   const motion = currentClip.xy.div(currentClip.w).sub(previousClip.xy.div(previousClip.w)).mul(0.5);
   return T.vec4(motion, previousClip.w.div(currentClip.w).sub(1), 0);
+}
+
+/**
+ * Creates the environment background: a fullscreen triangle at the far plane, drawn last in the opaque pass so it
+ * only shades the pixels (MSAA samples) no surface covered. It writes the same encoded colour as the opaque
+ * materials, so the MSAA resolve of a silhouette against it is tonemapped like any other edge, and a camera-only
+ * velocity (the direction at infinity, w = 0, so camera translation doesn't move it) for TAA and the motion blur.
+ * The depth stays at the far plane: TAA, the glass and the motion blur still treat these pixels as background.
+ */
+function createBackgroundMesh(texture, { blurriness, intensity, exposure, encoding, viewProjection, previousViewProjection }) {
+  const geometry = new GPU.BufferGeometry();
+  geometry.setAttribute('position', new GPU.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
+
+  const material = new GPU.MeshBasicNodeMaterial({ name: 'EnvironmentBackgroundMaterial', depthWrite: false, depthTest: true });
+  material.depthFunc = GPU.LessEqualDepth;
+  const clip = T.vec4(T.positionGeometry.xy, 1, 1);
+  material.vertexNode = clip;
+  // World direction of the pixel through the camera's own (jittered) projection, so it is sampled like the geometry.
+  const view = T.cameraProjectionMatrixInverse.mul(clip);
+  const direction = T.varying(T.cameraWorldMatrix.mul(T.vec4(view.xyz.div(view.w), 0)).xyz, 'v_backgroundDirection').normalize();
+  const radiance = T.pmremTexture(texture, direction, blurriness).rgb.mul(intensity);
+  material.colorNode = T.vec4(radiance, 1);
+  material.outputNode = createEncodedOutputNode(exposure, encoding);
+
+  const current = viewProjection.mul(T.vec4(direction, 0));
+  const previous = previousViewProjection.mul(T.vec4(direction, 0));
+  const motion = current.xy.div(current.w).sub(previous.xy.div(previous.w)).mul(0.5);
+  material.mrtNode = T.mrt({ velocity: T.vec4(motion, 0, 0) });
+
+  const mesh = new GPU.Mesh(geometry, material);
+  mesh.name = 'EnvironmentBackground';
+  mesh.frustumCulled = false;
+  mesh.renderOrder = Number.MAX_SAFE_INTEGER;
+  mesh.layers.set(OPAQUE_LAYER);
+  return mesh;
 }
 
 /**
@@ -561,6 +601,11 @@ export class WebGpuGeometry {
     this._mergeSources = null;
     this._mergeQuad = null;
     this._savedProjection = new GPU.Matrix4();
+    // The environment background, built for the first texture background and rebuilt if it changes
+    this._backgroundMesh = null;
+    this._backgroundTexture = null;
+    this._backgroundBlurriness = T.uniform(0);
+    this._backgroundIntensity = T.uniform(1);
     this._allocate();
 
     /** @type {Array<Object>} Per-mesh records created by prepare(), in traversal order. Read-only for consumers. */
@@ -735,8 +780,10 @@ export class WebGpuGeometry {
     }
 
     const background = scene.background;
-    // The reference clear pass clears to the encoded background color; a texture background cannot be
-    // encoded here and is left to the post-color stage.
+    // The reference clear pass clears to the encoded background color. A texture background (the environment's
+    // PMREM, `scene.background = scene.environment`) is drawn by the opaque pass itself, see createBackgroundMesh.
+    const backgroundMesh = this._prepareBackground(background, scene);
+    this.edgeReflections._backgroundVisible.value = backgroundMesh === null ? 0 : 1;
     const clearColor = background !== null && background.isColor === true
       ? encodeColor(background, this._exposure.value, ENCODINGS[this._encoding.value], this._clearColor)
       : this._clearColor.setRGB(0, 0, 0);
@@ -754,6 +801,7 @@ export class WebGpuGeometry {
 
     try {
       scene.background = null;
+      if (backgroundMesh !== null) scene.add(backgroundMesh);
       camera.layers.set(OPAQUE_LAYER);
 
       // The attachments own their clear values, so the stage does not depend on the caller's autoClear setup.
@@ -777,6 +825,7 @@ export class WebGpuGeometry {
       renderer.setMRT(previousMRT);
       renderer.setRenderTarget(previousTarget, previousCubeFace, previousMipmapLevel);
       scene.background = background;
+      if (backgroundMesh !== null) scene.remove(backgroundMesh);
       camera.layers.mask = previousLayers;
       renderer.autoClear = previousAutoClear;
       renderer.autoClearColor = previousAutoClearColor;
@@ -856,6 +905,7 @@ export class WebGpuGeometry {
     this._materials.length = 0;
     this._releaseTargets();
     this._mergeQuad?.material.dispose();
+    this._disposeBackground();
   }
 
   /**
@@ -890,6 +940,34 @@ export class WebGpuGeometry {
     renderer.setMRT(null);
     renderer.setRenderTarget(this._mergeTarget);
     this._mergeQuad.render(renderer);
+  }
+
+  /**
+   * Returns the background mesh for a texture background (null for a colour or none), with the scene's
+   * backgroundBlurriness (PMREM level, 0 sharp) and backgroundIntensity applied.
+   */
+  _prepareBackground(background, scene) {
+    if (background === null || background === undefined || background.isTexture !== true) return null;
+    if (this._backgroundTexture !== background) {
+      this._disposeBackground();
+      this._backgroundTexture = background;
+      this._backgroundMesh = createBackgroundMesh(background, {
+        blurriness: this._backgroundBlurriness, intensity: this._backgroundIntensity,
+        exposure: this._exposure, encoding: this._encoding,
+        viewProjection: this._viewProjection, previousViewProjection: this._previousViewProjection,
+      });
+    }
+    this._backgroundBlurriness.value = scene.backgroundBlurriness ?? 0;
+    this._backgroundIntensity.value = scene.backgroundIntensity ?? 1;
+    return this._backgroundMesh;
+  }
+
+  _disposeBackground() {
+    if (this._backgroundMesh === null) return;
+    this._backgroundMesh.geometry.dispose();
+    this._backgroundMesh.material.dispose();
+    this._backgroundMesh = null;
+    this._backgroundTexture = null;
   }
 
   /** The averaging pass: both attachments in one draw, same size, so storage pixels map 1:1. */
