@@ -33,7 +33,6 @@ export async function createReferenceManager({ width = 900, height = 600, pixelR
     envmapUrl,
     targetDistance: 0.8, minDistance: 0.4, maxDistance: 2.0,
     initDelay: 0, initDelayInteractive: 0, startup: 'manual',
-    lowPerformanceSettings: { disableMSAA: false, lowResolution: false },
     smaa: false, grazingSpecularClamp: false,
     perfSampling: { stabilityDuration: 0, measureDuration: 0.1 },
     e_interactivityChange: () => {}, e_loaded: () => {}, e_ready: () => {},

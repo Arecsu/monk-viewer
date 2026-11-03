@@ -106,7 +106,6 @@ function start(data) {
 		initDelay: data.initDelay,
 		startup: data.startup,
 		initDelayInteractive: data.initDelayInteractive,
-		lowPerformanceSettings: data.lowPerformanceSettings,
 		smaa: data.smaa,
 		grazingSpecularClamp: data.grazingSpecularClamp,
 		perfSampling: data.perfSampling,

@@ -168,7 +168,6 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 		initDelay: 0,
 		initDelayInteractive: 0,
 		startup: "auto",
-		lowPerformanceSettings: { disableMSAA: false, lowResolution: false },
 		smaa: params.get("smaa") !== "0",
 		grazingSpecularClamp: params.get("clamp") !== "0",
 		perfSampling: { stabilityDuration: 0, measureDuration: 0.1 },

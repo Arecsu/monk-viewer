@@ -223,7 +223,6 @@ class MonkView extends HTMLElement {
     initDelay: number;
     initDelayInteractive: number;
     startup: string;
-    lowPerformanceSettings: ReturnType<MonkView["getLowPerformanceSettings"]>;
     smaa: boolean;
     grazingSpecularClamp: boolean;
     perfSampling: {
@@ -293,7 +292,6 @@ class MonkView extends HTMLElement {
       initDelay,
       initDelayInteractive,
       startup,
-      lowPerformanceSettings: this.getLowPerformanceSettings(),
       smaa: this.getAttribute("smaa") === "true",
       grazingSpecularClamp: this.getAttribute("grazing-specular-clamp") === "true",
       perfSampling
@@ -396,21 +394,6 @@ class MonkView extends HTMLElement {
   private handleOnReady(state: boolean) {
     this.setAttribute('ready', 'true')
     this.dispatchEvent(new CustomEvent('ready', { detail: { state } }));
-  }
-
-  private getLowPerformanceSettings() {
-    const userAgent = navigator.userAgent;
-    // Firefox, not the platform: Android devices get the same settings as iOS, the auto-tuner handles slow ones
-    const isFirefoxMacOrAndroid = /(Macintosh|Android)(?!.*KHTML).*Gecko/i.test(userAgent);
-  
-    if (isFirefoxMacOrAndroid && this.useOffscreenCanvas) {
-      return { disableMSAA: true, lowResolution: true };
-    }
-    if (isFirefoxMacOrAndroid) {
-      return { disableMSAA: true, lowResolution: false };
-    }
-  
-    return { disableMSAA: false, lowResolution: false };
   }
 
   startWorker(canvas: HTMLCanvasElement): void {

@@ -37,18 +37,13 @@ export class ThreeSceneManager {
 		// this.modelUrl = artworkModelUrl;
 		this.envmapUrl = data.envmapUrl
 		// this.envmapUrl = HDRIMAP;
-		this.lowPerformanceSettings = {
-			disableMSAA: data.lowPerformanceSettings?.disableMSAA ?? false,
-			lowResolution: data.lowPerformanceSettings?.lowResolution ?? false,
-		}
 		this.baseLoadPixelRatio = data.pixelRatio ?? globalThis.devicePixelRatio ?? 1
 		this.baseDisplayPixelRatio = globalThis.devicePixelRatio ?? 1
-		this.initialRenderPixelRatio = this.lowPerformanceSettings.lowResolution ? this.baseLoadPixelRatio / 2 : this.baseLoadPixelRatio
+		this.initialRenderPixelRatio = this.baseLoadPixelRatio
 		this.performantRenderPixelRatio = null
-		// this.msaaSamples = this.lowPerformanceSettings.disableMSAA ? 0 : 4;
-		// this.msaaSamples = this.lowPerformanceSettings.disableMSAA ? 0 : 0;
-		// 4 samples: thin bright edges (e.g. the 2.4mm frame sides) slip between the 2 sample rows of 2x MSAA
-		this.msaaSamples = this.lowPerformanceSettings.disableMSAA ? 0 : 4;
+		// 4 samples: thin bright edges (e.g. the 2.4mm frame sides) slip between the 2 sample rows of 2x MSAA. Every
+		// browser starts with it; the auto-tuner drops it on devices that can't keep up.
+		this.msaaSamples = 4
 		// Tonemapped resolve only pays off with MSAA
 		this.resolvePass = null
 		this.geometryPass = null

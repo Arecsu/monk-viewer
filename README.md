@@ -39,7 +39,6 @@ Additional contribution to @monogrid/gainmap-js which made it compatible with we
 ## Known issues
 
 - Chrome precise FPS measurement is just pain. It is not possible. Android devices used to get MSAA disabled and a 2x pixel ratio cap up front; they have improved enough that they now get the same settings as iOS and desktop (4x MSAA + TAA), and the auto-tuner drops MSAA, then resolution, on the ones that can't keep up.
-- Same as this, Firefox on Mac and Android works horrible with MSAA, high resolution and offscreen canvas. MSAA is disabled and pixel ratio is lowered.
 - `postprocessing`'s SMAAEffect doesn't work in offscreen canvas mode: it decodes its lookup textures with `Image`, which workers lack. `src/postprocessing/SMAAEffect.ts` decodes them with `createImageBitmap` instead (opt-in via the `smaa="true"` attribute, off by default: it doesn't improve the thin bright edges beyond TAA).
 
 ## Performance checks
