@@ -318,8 +318,8 @@ export function createTemporalAAMaterial(uniforms, textures, { upscale = false, 
       const velocityPixels = closestUv.sub(motionData.xy).div(texelSize).toVar('taaVelocityPixels');
       const motion = length(historyUv.sub(uv).div(texelSize)).toVar('taaMotion');
 
-      // Disabled TAA is a pure bypass: no jitter, no filtering. The pipeline reports no motion and uses full bounds,
-      // so the state is not consumed; it is still written fresh rather than leaving stale motion behind.
+      // Disabled TAA is a pure bypass: no jitter, no filtering. The state is still written, with the same depth and
+      // per-mesh motion as when enabled: the motion blur reads it without TAA.
       If(enabled.not(), () => {
         const input = currentInput(uv);
         historyColor.assign(vec4(input, 1.0));

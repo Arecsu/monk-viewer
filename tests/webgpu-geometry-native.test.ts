@@ -512,8 +512,8 @@ test("exposure, encoding, samples and the AA settings stay mutable at runtime", 
     const scaled = geometry.grazingClamp.factor(T.vec3(0.5, 0.5, 0.5));
     assert.notEqual(scaled, null);
 
-    // The logical MSAA level stays 0 or 4 like the reference's msaaSamples: the auto-tuner decides by
-    // testing `samples > 0`, so a disabled stage must report 0 and not silently become 1.
+    // The logical MSAA level is 0, 2, 4 or 8: the auto-tuner decides by testing `samples > 0`, so a disabled
+    // stage must report 0 and not silently become 1.
     const before = geometry.target;
     assert.equal(geometry.samples, 4);
     geometry.samples = 4;
@@ -528,10 +528,23 @@ test("exposure, encoding, samples and the AA settings stay mutable at runtime", 
     geometry.samples = 0;
     assert.equal(geometry.target, disabled, "re-applying 0 is a no-op, so a tuner loop terminates");
     geometry.samples = 1;
-    assert.equal(geometry.target, disabled, "every level below 4 is the same disabled level");
+    assert.equal(geometry.target, disabled, "every level below 2 is the same disabled level");
+    // WebGPU only has 1x and 4x: 2x is two single-sample draws, 8x two 4x draws, averaged.
+    geometry.samples = 2;
+    assert.equal(geometry.samples, 2);
+    assert.equal(geometry.target.samples, 0);
+    assert.deepEqual(geometry.sampleLayout, { hardwareSamples: 0, draws: 2 });
+    geometry.samples = 6;
+    assert.equal(geometry.samples, 4, "levels round down to the nearest supported one");
+    geometry.samples = 8;
+    assert.equal(geometry.samples, 8);
+    assert.equal(geometry.target.samples, 4);
+    assert.deepEqual(geometry.sampleLayout, { hardwareSamples: 4, draws: 2 });
+    geometry.render({ projection: camera.projectionMatrix });
     geometry.samples = 4;
     assert.equal(geometry.samples, 4);
     assert.equal(geometry.target.samples, 4);
+    assert.deepEqual(geometry.sampleLayout, { hardwareSamples: 4, draws: 1 });
 
     // Sanity: a render still works after the mutability round trip.
     geometry.render({ projection: camera.projectionMatrix });

@@ -594,8 +594,8 @@ export class WebGpuTemporalAA {
       throw new Error('WebGpuTemporalAA: a PerspectiveCamera is required');
     }
 
-    // With TAA disabled the pipeline reports no motion and the state is unused; a missing velocity texture must not
-    // block the bypass. While enabled, a truthy velocityBuffer promises a per-mesh input and silently falling back
+    // With TAA disabled the bypass still writes the state the motion blur reads, rigidly reprojected when there is
+    // no velocity texture; a missing velocity texture must not block the bypass. While enabled, a truthy velocityBuffer promises a per-mesh input and silently falling back
     // to rigid reprojection would weaken the algorithm.
     const useVelocity = this._velocityBuffer !== null && velocity !== null;
     if (this._enabled && this._velocityBuffer !== null && velocity === null) {

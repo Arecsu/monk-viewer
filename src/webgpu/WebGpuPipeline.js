@@ -219,8 +219,9 @@ export class WebGpuPipeline {
         color: taa.color,
         state: taa.state,
         bounds: this.taa.enabled ? this.taa.backgroundBounds : null,
-        // A frame without any motion blurs to an exact copy: skip it
-        hasMotion: this.taa.enabled && !this.taa.motionless,
+        // TAA writes the per-pixel state (view depth + per-mesh motion) even while disabled, so the blur works
+        // without it. A frame without any motion blurs to an exact copy: skip it
+        hasMotion: !this.taa.motionless,
       });
       const bounds = this.motionBlur.enabled ? this.motionBlur.backgroundBounds
         : this.taa.enabled ? this.taa.backgroundBounds : null;

@@ -6,7 +6,8 @@
 // the SMAA pass, ?clamp=0 starts with the grazing clamp off, ?fixed=1 (or the older ?live=0) pins the deterministic
 // 900x600 @1x framebuffer used for measurement runs. Without it the canvas fills the viewport at the device pixel
 // ratio. ?preset=legacy starts with the previous TAA settings instead of the modern ones. ?backend=auto|webgl|webgpu.
-// Hotkeys: M MSAA, T TAA, S SMAA, C static convergence, G grazing clamp, J jitter compensation,
+// ?msaa=0|2|4|8 starts at that MSAA level (native WebGPU: 2x and 8x are two averaged draws, see Geometry.js).
+// Hotkeys: M MSAA on/off, T TAA, S SMAA, C static convergence, G grazing clamp, J jitter compensation,
 // F adaptive filter, N 3x3 neighbourhood, D depth validation, L thin feature locks, E edge blend,
 // A specular AA, B motion blur, O bloom, K GT7 tone mapping, U temporal upscaling on/off (WebGPU), V cycle the debug view, R reset history, P hide/show the panel.
 
@@ -43,6 +44,8 @@ const panelMarkup = (title, motion) => `
       </div>`).join("")}
 
     <h2>Toggles</h2>
+    <div class="row"><label>MSAA</label><div class="toggles" id="msaa-levels"></div></div>
+    <div id="msaa-state" class="note"></div>
     <div class="toggles" id="toggles"></div>
 
     <h2>Modern TAA</h2>
@@ -180,6 +183,7 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 		},
 		e_loaded: () => {
 			if (!mode.startsWith("taa")) window.mgr.taa.enabled = false
+			if (params.has("msaa")) setMsaa(Number(params.get("msaa")))
 			if (window.mgr.smaaPass) window.mgr.smaaPass.enabled = mode.endsWith("+smaa")
 			if (grading) Object.assign(mgr.gt7ToneMapping, grading)
 			window.loaded = true
@@ -256,14 +260,32 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 	// pass while disabled
 	const bloom = () => mgr.pipeline.passes.find(p => p.effects).effects[0]
 
+	// MSAA levels. The native WebGPU geometry renders 1x or 4x in hardware and builds 2x/8x from two averaged draws
+	// (Geometry.js SAMPLE_LAYOUTS); WebGL uses real hardware samples, up to the context's MAX_SAMPLES.
+	const msaaLevels = [0, 2, 4, 8]
+	const nativeMsaa = () => "sampleLayout" in mgr.geometryPass
+	const maxMsaa = () => nativeMsaa() ? 8 : (mgr.renderer.capabilities?.maxSamples ?? 4)
+	let msaaBackup = mgr.msaaSamples || 4
+	const setMsaa = (level) => {
+		const samples = msaaLevels.filter((l) => l <= Math.min(level, maxMsaa())).pop()
+		if (samples > 0) msaaBackup = samples
+		mgr.geometryPass.samples = samples
+		T().reset()
+	}
+	const msaaNote = () => {
+		const samples = mgr.geometryPass.samples
+		if (!nativeMsaa()) return samples > 0 ? `${samples}x hardware MSAA (max ${maxMsaa()}x)` : "off"
+		const { hardwareSamples, draws } = mgr.geometryPass.sampleLayout
+		if (draws === 1) return samples > 0 ? "4x hardware MSAA" : "off"
+		return hardwareSamples > 0 ? `8x = 2 draws of 4x MSAA at offset positions (2× geometry cost)`
+			: `2x = 2 draws of 1x, supersampled (WebGPU has no 2x MSAA)`
+	}
+
 	const toggles = [
 		["taa", "TAA", () => T().enabled, (v) => { T().enabled = v }],
 		["background", "TAA bounds", () => T().backgroundFastPath, (v) => { T().backgroundFastPath = v; T().reset() }],
 		["bloomBounds", "bloom bounds", () => bloom().backgroundFastPath, (v) => { bloom().backgroundFastPath = v }],
-		["msaa", "MSAA", () => mgr.geometryPass.samples > 0, (v) => {
-			mgr.geometryPass.samples = v ? mgr.msaaSamples : 0
-			T().reset()
-		}],
+		["msaa", "MSAA", () => mgr.geometryPass.samples > 0, (v) => setMsaa(v ? msaaBackup : 0)],
 		["smaa", "SMAA", () => !!mgr.smaaPass?.enabled, (v) => { if (mgr.smaaPass) mgr.smaaPass.enabled = v }],
 		["clamp", "grazing clamp", () => mgr.grazingClamp.enabled, (v) => { mgr.grazingClamp.enabled = v }],
 		["static", "static convergence", () => T().staticConvergence, (v) => { T().staticConvergence = v; T().reset() }],
@@ -513,6 +535,7 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 		motionBlur: { enabled: mgr.motionBlurPass.enabled, adaptiveSamples: mgr.motionBlurPass.adaptiveSamples, shutter: mgr.motionBlurPass.shutter,
 			maxBlur: mgr.motionBlurPass.maxBlur, samples: mgr.motionBlurPass.samples, softDepth: mgr.motionBlurPass.softDepth },
 		bloom: { enabled: bloom().enabled, backgroundFastPath: bloom().backgroundFastPath },
+		msaa: mgr.geometryPass.samples,
 		specularAntialiasing: { enabled: mgr.specularAA.enabled, variance: mgr.specularAA.variance, threshold: mgr.specularAA.threshold },
 		grazingSpecularClamp: mgr.grazingClamp.enabled,
 		toneMapping: { gt7: mgr.gt7ToneMapping.enabled, ...Object.fromEntries(["exposure", "contrast", "blackPoint",
@@ -531,6 +554,13 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 			button.classList.toggle("on", !!get())
 		}
 		$("half-res").classList.toggle("on", resolutionScale === 0.5)
+		for (const button of $("msaa-levels").children) {
+			const level = Number(button.dataset.level)
+			button.disabled = level > maxMsaa()
+			button.title = button.disabled ? `this WebGL context supports up to ${maxMsaa()}x` : ""
+			button.classList.toggle("on", mgr.geometryPass.samples === level)
+		}
+		$("msaa-state").textContent = msaaNote()
 		for (const button of $("upscale-presets").children) {
 			button.disabled = !canUpscale()
 			button.classList.toggle("on", canUpscale() && Math.abs(mgr.pipeline.renderScale - Number(button.dataset.scale)) < 1e-3)
@@ -589,6 +619,14 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 		blurToggles.forEach((t) => createToggle(t, "blur-toggles"))
 		performanceToggles.forEach((t) => createToggle(t, "performance-toggles"))
 		sliders.forEach(createSlider)
+
+		for (const level of msaaLevels) {
+			const button = document.createElement("button")
+			button.textContent = level ? `${level}x` : "off"
+			button.dataset.level = String(level)
+			button.addEventListener("click", () => { if (!button.disabled) { setMsaa(level); refresh() } })
+			$("msaa-levels").append(button)
+		}
 
 		for (const [label, scale] of upscalePresets) {
 			const button = document.createElement("button")

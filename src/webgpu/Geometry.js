@@ -1,5 +1,5 @@
 // Native WebGPU geometry stage: opaque forward shading into encoded HDR + per-mesh velocity, with the
-// 4x MSAA depth retained for the later stages. This is a port of the reference geometry stage:
+// MSAA depth retained for the later stages (4x native; 2x and 8x are two averaged draws, see SAMPLE_LAYOUTS). This is a port of the reference geometry stage:
 // GeometryPass (opaque draw), VelocityBuffer (per-object motion), TonemappedResolvePass.encodeMaterial
 // (the MSAA encoding curves), SpecularAntialiasing and GrazingSpecularClamp.
 //
@@ -24,7 +24,26 @@ export const GLASS_LAYER = 1;
 export const ENCODINGS = ['linear', 'rgb', 'max'];
 
 const LUMINANCE = [0.2126, 0.7152, 0.0722];
-const MAX_SAMPLES = 4;
+
+/**
+ * How each logical MSAA level is rendered. WebGPU only allows 1 or 4 hardware samples, so 2x and 8x are built from
+ * two draws of the scene at complementary sub-pixel offsets whose resolves are averaged:
+ *
+ * - 8x: two 4x MSAA draws offset by ±(1/16, 1/16) px. The union of the two rotated-grid 4x patterns is 8 samples with
+ *   8 distinct rows and columns (n-rooks), like the D3D 8x pattern: (-1,-5) (7,-1) (-5,3) (3,7) / (-3,-7) (5,-3)
+ *   (-7,1) (1,5) in 1/16 px. Coverage is 8x, shading 2 per pixel (one per draw), geometry cost 2x.
+ * - 2x: two single-sample draws at the standard 2x positions ±(4/16, 4/16) px. Both coverage and shading are
+ *   sampled twice, so this is 2x supersampling: a little better than real 2x MSAA on shading aliasing.
+ *
+ * The resolves are averaged in the encoded (tonemapped) space, which is exactly the encoded average of all the
+ * samples. The pattern is symmetric under the y flip, so the projection's NDC-up offsets give the same set.
+ */
+export const SAMPLE_LAYOUTS = Object.freeze({
+  0: Object.freeze({ hardwareSamples: 0, offsets: Object.freeze([[0, 0]]) }),
+  2: Object.freeze({ hardwareSamples: 0, offsets: Object.freeze([[0.25, 0.25], [-0.25, -0.25]]) }),
+  4: Object.freeze({ hardwareSamples: 4, offsets: Object.freeze([[0, 0]]) }),
+  8: Object.freeze({ hardwareSamples: 4, offsets: Object.freeze([[0.0625, 0.0625], [-0.0625, -0.0625]]) }),
+});
 
 // Scratch for the CPU velocity mirror; it is not part of the render path.
 const _currentClip = new GPU.Vector4();
@@ -90,11 +109,11 @@ export function velocityForVertex(position, { currentViewProjection, currentMode
 }
 
 /**
- * The logical MSAA level. The reference viewer keeps `msaaSamples` at 4 or 0, and its auto-tuner decides by
- * testing `samples > 0`; the native backend renders 1x or 4x, so a request below 4 disables MSAA and stays 0.
+ * The logical MSAA level: 0, 2, 4 or 8, rounded down (see {@link SAMPLE_LAYOUTS}). The auto-tuner decides by testing
+ * `samples > 0`, so a disabled stage stays 0, never 1.
  */
-function normalizeSamples(samples) {
-  return samples >= MAX_SAMPLES ? MAX_SAMPLES : 0;
+export function normalizeSamples(samples) {
+  return samples >= 8 ? 8 : samples >= 4 ? 4 : samples >= 2 ? 2 : 0;
 }
 
 /**
@@ -289,12 +308,8 @@ function createMaterialClasses(specularAA, grazingClamp) {
   return { standard: create(GPU.MeshStandardNodeMaterial), physical: create(GPU.MeshPhysicalNodeMaterial) };
 }
 
-/**
- * Creates the geometry render target: encoded HDR color + nearest velocity, both actually 4x multisampled,
- * with the depth samples retained for later stages.
- */
-function createGeometryTarget(width, height, samples) {
-  const target = new GPU.RenderTarget(width, height, { depthBuffer: true, stencilBuffer: false, samples, count: 2 });
+/** Sets up the two attachments shared by the geometry and the merge targets: encoded HDR color and velocity. */
+function configureAttachments(target) {
   const [color, velocity] = target.textures;
 
   color.name = 'output';
@@ -312,6 +327,15 @@ function createGeometryTarget(width, height, samples) {
   velocity.colorSpace = GPU.NoColorSpace;
   velocity.minFilter = velocity.magFilter = GPU.NearestFilter;
   velocity.generateMipmaps = false;
+  return target;
+}
+
+/**
+ * Creates the geometry render target: encoded HDR color + nearest velocity, both actually multisampled (when
+ * samples is 4), with the depth samples retained for later stages.
+ */
+function createGeometryTarget(width, height, samples) {
+  const target = configureAttachments(new GPU.RenderTarget(width, height, { depthBuffer: true, stencilBuffer: false, samples, count: 2 }));
 
   // DepthFormat + FloatType is depth32float; without reverse depth, near is 0 and far is 1.
   target.depthTexture = new GPU.DepthTexture(width, height, GPU.FloatType);
@@ -322,6 +346,11 @@ function createGeometryTarget(width, height, samples) {
   target.storeMultisampledDepthBuffer = true;
 
   return target;
+}
+
+/** The single-sample target the resolves of a two-draw level are averaged into. */
+function createMergeTarget(width, height) {
+  return configureAttachments(new GPU.RenderTarget(width, height, { depthBuffer: false, stencilBuffer: false, count: 2 }));
 }
 
 /**
@@ -337,8 +366,7 @@ export class WebGpuGeometry {
    * @param {Object} [options] - The stage options.
    * @param {GPU.Scene} [options.scene] - The scene to render.
    * @param {GPU.Camera} [options.camera] - The camera to render with; its layers are set to OPAQUE_LAYER for the draw.
-   * @param {number} [options.samples=4] - The logical MSAA level: 4 for 4x MSAA, 0 to disable it. Requests below
-   *   4 disable MSAA, because the native backend only renders 1x or 4x.
+   * @param {number} [options.samples=4] - The logical MSAA level: 0, 2, 4 or 8, see {@link SAMPLE_LAYOUTS}.
    * @param {number} [options.exposure=1.6] - The encoding exposure shared with the decode stage.
    * @param {string} [options.encoding='rgb'] - The MSAA curve, one of {@link ENCODINGS}.
    * @param {Object} [options.specularAA] - Specular antialiasing settings: `{enabled, variance, threshold}`.
@@ -376,7 +404,14 @@ export class WebGpuGeometry {
     this._samples = normalizeSamples(samples);
     this._width = 1;
     this._height = 1;
-    this._target = createGeometryTarget(this._width, this._height, this._samples);
+    this._target = null;
+    // Two-draw levels only: the target of the second draw, and the averaged resolve.
+    this._secondTarget = null;
+    this._mergeTarget = null;
+    this._mergeSources = null;
+    this._mergeQuad = null;
+    this._savedProjection = new GPU.Matrix4();
+    this._allocate();
 
     /** @type {Array<Object>} Per-mesh records created by prepare(), in traversal order. Read-only for consumers. */
     this.meshes = [];
@@ -395,8 +430,8 @@ export class WebGpuGeometry {
   }
 
   /**
-   * The logical MSAA level: 4 with MSAA, 0 when disabled. With 0 the multitarget is single-sampled
-   * (`target.samples === 0`, like the reference's `msaaSamples`), which is what the auto-tuner tests.
+   * The logical MSAA level: 0, 2, 4 or 8 (see {@link SAMPLE_LAYOUTS}), 0 when disabled. With 0 the multitarget is
+   * single-sampled (`target.samples === 0`, like the reference's `msaaSamples`), which is what the auto-tuner tests.
    */
   get samples() {
     return this._samples;
@@ -407,6 +442,12 @@ export class WebGpuGeometry {
     if (samples === this._samples) return;
     this._samples = samples;
     this._reallocate();
+  }
+
+  /** How the current level renders: `{hardwareSamples, draws}`, e.g. 8x is two draws of 4x MSAA. */
+  get sampleLayout() {
+    const layout = SAMPLE_LAYOUTS[this._samples];
+    return { hardwareSamples: layout.hardwareSamples, draws: layout.offsets.length };
   }
 
   /** The encoding exposure shared with the decode stage. */
@@ -574,9 +615,14 @@ export class WebGpuGeometry {
       this._mrt.setClearColor('output', clearColor, 1);
       this._mrt.setClearColor('velocity', this._background, 0);
 
-      renderer.setRenderTarget(this._target);
-      renderer.setMRT(this._mrt);
-      renderer.render(scene, camera);
+      const { offsets } = SAMPLE_LAYOUTS[this._samples];
+      if (offsets.length === 1) {
+        renderer.setRenderTarget(this._target);
+        renderer.setMRT(this._mrt);
+        renderer.render(scene, camera);
+      } else {
+        this._renderDraws(offsets);
+      }
     } finally {
       renderer.setMRT(previousMRT);
       renderer.setRenderTarget(previousTarget, previousCubeFace, previousMipmapLevel);
@@ -590,9 +636,11 @@ export class WebGpuGeometry {
 
     this._pendingViewProjection = viewProjection;
 
+    // Two-draw levels hand out the averaged resolve; the depth is the main draw's, the one `target` returns.
+    const resolved = this._mergeTarget ?? this._target;
     return {
-      color: this._target.textures[0],
-      velocity: this._target.textures[1],
+      color: resolved.textures[0],
+      velocity: resolved.textures[1],
       depth: this._target.depthTexture,
       target: this._target,
       meshesMoved: this._moved,
@@ -656,12 +704,81 @@ export class WebGpuGeometry {
 
     for (const material of this._materials) material.dispose();
     this._materials.length = 0;
-    this._target.dispose();
+    this._releaseTargets();
+    this._mergeQuad?.material.dispose();
+  }
+
+  /**
+   * Draws the scene once per offset and averages the resolves. The offsets shift the projection (on top of any TAA
+   * jitter) by a fraction of a render pixel; the velocity uses the unjittered projection uniforms and is unaffected.
+   * The main target is drawn last, so its retained depth and the `target` getter belong to the same draw.
+   */
+  _renderDraws(offsets) {
+    const { renderer, camera } = this;
+    const projection = camera.projectionMatrix;
+    this._savedProjection.copy(projection);
+    try {
+      offsets.forEach(([x, y], index) => {
+        projection.copy(this._savedProjection);
+        projection.elements[8] += (2 * x) / this._width;
+        projection.elements[9] += (2 * y) / this._height;
+        camera.projectionMatrixInverse.copy(projection).invert();
+        renderer.setRenderTarget(index === offsets.length - 1 ? this._target : this._secondTarget);
+        renderer.setMRT(this._mrt);
+        renderer.render(this.scene, camera);
+      });
+    } finally {
+      projection.copy(this._savedProjection);
+      camera.projectionMatrixInverse.copy(projection).invert();
+    }
+
+    const sources = this._mergeSources;
+    sources.colorA.value = this._target.textures[0];
+    sources.colorB.value = this._secondTarget.textures[0];
+    sources.velocityA.value = this._target.textures[1];
+    sources.velocityB.value = this._secondTarget.textures[1];
+    renderer.setMRT(null);
+    renderer.setRenderTarget(this._mergeTarget);
+    this._mergeQuad.render(renderer);
+  }
+
+  /** The averaging pass: both attachments in one draw, same size, so storage pixels map 1:1. */
+  _createMergeQuad() {
+    // Dummy uvs keep TextureNode from adding texture matrix uniforms to the loads.
+    const node = () => T.texture(new GPU.Texture(), T.vec2(0));
+    const sources = { colorA: node(), colorB: node(), velocityA: node(), velocityB: node() };
+    const pixel = T.ivec2(T.screenCoordinate.xy);
+    const color = T.textureLoad(sources.colorA, pixel).rgb.add(T.textureLoad(sources.colorB, pixel).rgb).mul(0.5);
+    const velocity = T.textureLoad(sources.velocityA, pixel).add(T.textureLoad(sources.velocityB, pixel)).mul(0.5);
+    const material = new GPU.MeshBasicNodeMaterial({ name: 'GeometryMergeMaterial', depthTest: false, depthWrite: false, toneMapped: false });
+    material.blending = GPU.NoBlending;
+    material.colorNode = T.vec4(color, 1);
+    // Member order matches the attachment order: color, velocity.
+    material.outputNode = T.outputStruct(T.vec4(color, 1), velocity);
+    this._mergeSources = sources;
+    return new GPU.QuadMesh(material);
+  }
+
+  _allocate() {
+    const layout = SAMPLE_LAYOUTS[this._samples];
+    this._target = createGeometryTarget(this._width, this._height, layout.hardwareSamples);
+    if (layout.offsets.length > 1) {
+      this._secondTarget = createGeometryTarget(this._width, this._height, layout.hardwareSamples);
+      this._mergeTarget = createMergeTarget(this._width, this._height);
+      this._mergeQuad ??= this._createMergeQuad();
+    }
+  }
+
+  _releaseTargets() {
+    this._target?.dispose();
+    this._secondTarget?.dispose();
+    this._mergeTarget?.dispose();
+    this._target = this._secondTarget = this._mergeTarget = null;
   }
 
   _reallocate() {
-    this._target.dispose();
-    this._target = createGeometryTarget(this._width, this._height, this._samples);
+    this._releaseTargets();
+    this._allocate();
     // A resize or a sample change invalidates the previous frame: the attachments and the motion history
     // both restart, so the first frame in the new configuration reports no motion.
     this.reset();
