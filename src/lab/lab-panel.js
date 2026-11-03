@@ -89,6 +89,11 @@ const panelMarkup = (title, motion) => `
     <h2>Specular AA</h2>
     <div id="specular"></div>
 
+    <h2>Edge reflections</h2>
+    <div class="toggles" id="edge-toggles"></div>
+    <div class="note">Silhouettes and edge-on surfaces: keep normals facing the camera, and fade the grazing reflection of the (hidden) environment into the black background, and roughen the glass pane's thin edges (ground, not polished). Native WebGPU only.</div>
+    <div id="edge"></div>
+
     <h2>Tone mapping</h2>
     <div class="toggles" id="tonemapping-toggles"></div>
     <div id="tonemapping"></div>
@@ -440,6 +445,30 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 			}],
 	]
 
+	// Edge reflections (Geometry.js EdgeReflections), native WebGPU only
+	const edge = () => mgr.edgeReflections ?? null
+	let edgeMatchBackup = 1
+	const edgeToggles = [
+		["edgeNormals", "corrected normals", () => !!edge()?.correctNormals, (v) => { if (edge()) edge().correctNormals = v }],
+		["edgeMatch", "background match", () => (edge()?.backgroundMatch ?? 0) > 0,
+			(v) => { if (edge()) edge().backgroundMatch = v ? edgeMatchBackup : 0 }],
+		["edgeGlass", "ground glass edges", () => !!edge()?.groundGlassEdges, (v) => { if (edge()) edge().groundGlassEdges = v }],
+	]
+	sliders.push(
+		["edge", "edgeMinNdotV", "min N·V", 0, 0.3, 0.005, 3,
+			() => edge()?.minNdotV ?? 0, (v) => { if (edge()) edge().minNdotV = v }],
+		["edge", "edgeMatchStrength", "match strength", 0, 1, 0.01, 2,
+			() => edge()?.backgroundMatch ?? 0, (v) => {
+				if (!edge()) return
+				if (v > 0) edgeMatchBackup = v
+				edge().backgroundMatch = v
+			}],
+		["edge", "edgeWidth", "match reach", 0.01, 0.6, 0.01, 2,
+			() => edge()?.width ?? 0, (v) => { if (edge()) edge().width = v }],
+		["edge", "edgeGlassRoughness", "glass edge rough", 0, 1, 0.01, 2,
+			() => edge()?.glassEdgeRoughness ?? 0, (v) => { if (edge()) edge().glassEdgeRoughness = v }],
+	)
+
 	// Optimizations that keep the image: A/B them against the plain versions
 	const blurToggles = [
 		["adaptiveBlur", "adaptive samples", () => !!mgr.motionBlurPass?.adaptiveSamples,
@@ -537,6 +566,9 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 		msaa: mgr.geometryPass.samples,
 		specularAntialiasing: { enabled: mgr.specularAA.enabled, variance: mgr.specularAA.variance, threshold: mgr.specularAA.threshold },
 		grazingSpecularClamp: mgr.grazingClamp.enabled,
+		edgeReflections: edge() && { correctNormals: edge().correctNormals, minNdotV: edge().minNdotV,
+			backgroundMatch: edge().backgroundMatch, width: edge().width,
+			groundGlassEdges: edge().groundGlassEdges, glassEdgeRoughness: edge().glassEdgeRoughness },
 		toneMapping: { gt7: mgr.gt7ToneMapping.enabled, ...Object.fromEntries(["exposure", "contrast", "blackPoint",
 			"shadowToe", "toeLength", "shoulderStart", "highlightHardness", "chromaPreservation", "saturation", "vibrance"].map((k) => [k, mgr.gt7ToneMapping[k]])) },
 		specializedTaaShader: T().specializeShader ?? null,
@@ -581,6 +613,7 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 		smaa.disabled = !mgr.smaaPass
 		// Native WebGPU only
 		toggleButtons.get("specialize").button.disabled = !("specializeShader" in t)
+		for (const [key] of edgeToggles) toggleButtons.get(key).button.disabled = !edge()
 		for (const slider of motionSliders) {
 			$(`motion-${slider.id}-out`).textContent = slider.format(motionState[slider.id])
 			$(`motion-${slider.id}`).value = motionState[slider.id]
@@ -590,6 +623,7 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 			const value = get()
 			if (document.activeElement !== input) input.value = value
 			if (key.startsWith("upscale")) input.disabled = !canUpscale()
+			if (key.startsWith("edge")) input.disabled = !edge()
 			output.textContent = key === "resolution" ? `${value.toFixed(2)}×` :
 				(decimals === 0 ? String(Math.round(value)) : value.toFixed(decimals))
 		}
@@ -616,6 +650,7 @@ export function startAaLab({ init, options, motion, title = "TAA lab", grading =
 		modernToggles.forEach((t) => createToggle(t, "modern-toggles"))
 		toneMappingToggles.forEach((t) => createToggle(t, "tonemapping-toggles"))
 		blurToggles.forEach((t) => createToggle(t, "blur-toggles"))
+		edgeToggles.forEach((t) => createToggle(t, "edge-toggles"))
 		performanceToggles.forEach((t) => createToggle(t, "performance-toggles"))
 		sliders.forEach(createSlider)
 

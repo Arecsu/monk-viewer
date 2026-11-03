@@ -512,6 +512,22 @@ test("exposure, encoding, samples and the AA settings stay mutable at runtime", 
     const scaled = geometry.grazingClamp.factor(T.vec3(0.5, 0.5, 0.5));
     assert.notEqual(scaled, null);
 
+    // Edge reflections: on by default, uniforms so they change at runtime.
+    const edge = geometry.edgeReflections;
+    assert.deepEqual([edge.correctNormals, edge.minNdotV, edge.backgroundMatch, edge.width], [true, 0.02, 1, 0.18]);
+    edge.correctNormals = true;
+    edge.minNdotV = 0.05;
+    edge.backgroundMatch = 0.8;
+    edge.width = 0.3;
+    assert.deepEqual([edge.correctNormals, edge.minNdotV, edge.backgroundMatch, edge.width], [true, 0.05, 0.8, 0.3]);
+    assert.notEqual(edge.correct(T.vec3(0, 0, 1)), null);
+    assert.notEqual(edge.factor(), null);
+    assert.deepEqual([edge.groundGlassEdges, edge.glassEdgeRoughness], [true, 1]);
+    edge.groundGlassEdges = true;
+    edge.glassEdgeRoughness = 0.8;
+    assert.deepEqual([edge.groundGlassEdges, edge.glassEdgeRoughness], [true, 0.8]);
+    assert.notEqual(edge.roughenGlassEdges(T.float(0.1), T.vec3(0, 1, 0)), null);
+
     // The logical MSAA level is 0, 2, 4 or 8: the auto-tuner decides by testing `samples > 0`, so a disabled
     // stage must report 0 and not silently become 1.
     const before = geometry.target;

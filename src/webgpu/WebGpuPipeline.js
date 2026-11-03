@@ -58,6 +58,12 @@ export class WebGpuPipeline {
           variance: manager.specularAA?.variance ?? 0.15, threshold: manager.specularAA?.threshold ?? 0.2 },
         grazingClamp: { enabled: manager.grazingClamp?.enabled ?? false,
           angle: manager.grazingClamp?.angle ?? 0.5, limit: manager.grazingClamp?.limit ?? 0.03 },
+        // Kept across a pipeline rebuild like the two above
+        edgeReflections: manager.edgeReflections ? {
+          correctNormals: manager.edgeReflections.correctNormals, minNdotV: manager.edgeReflections.minNdotV,
+          backgroundMatch: manager.edgeReflections.backgroundMatch, width: manager.edgeReflections.width,
+          groundGlassEdges: manager.edgeReflections.groundGlassEdges, glassEdgeRoughness: manager.edgeReflections.glassEdgeRoughness,
+        } : {},
       }));
       this.transparency = own(new WebGpuTransparency(renderer, { scene, camera, exposure, encoding: 'rgb', reactiveMask: true }));
       this.taa = own(new WebGpuTemporalAA(renderer, { scene, camera, exposure, ...MODERN_TAA }));
@@ -83,6 +89,7 @@ export class WebGpuPipeline {
       manager.velocityBuffer = manager.useVelocityBuffer === false ? manager.velocityBuffer : this.geometry;
       manager.specularAA = this.geometry.specularAA;
       manager.grazingClamp = this.geometry.grazingClamp;
+      manager.edgeReflections = this.geometry.edgeReflections;
       // The lab toggles `pipeline.passes.find(p => p.effects).effects[0].backgroundFastPath`.
       this.passes = [
         this.geometry, this.transparency, this.taa, this.motionBlur,

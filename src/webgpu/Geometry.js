@@ -244,11 +244,150 @@ class GrazingSpecularClamp {
    * as a delta on that base value, and it has to be added before `finish()` composes the layers.
    *
    * @param {Object} context - The lighting context of the current build.
+   * @param {Object} [extraScale] - Another scale of the indirect specular, applied in the same delta so the two
+   *   multiply instead of each subtracting from the original (see {@link EdgeReflections#factor}).
    */
-  apply(context) {
+  apply(context, extraScale = null) {
     const indirectSpecular = context.reflectedLight.indirectSpecular;
-    const clamped = indirectSpecular.mul(this.factor(indirectSpecular));
+    const scale = extraScale === null ? this.factor(indirectSpecular) : this.factor(indirectSpecular).mul(extraScale);
+    const clamped = indirectSpecular.mul(scale);
     context.outgoingLight.assign(context.outgoingLight.add(clamped.sub(indirectSpecular)));
+  }
+
+}
+
+/**
+ * Edge reflection settings, for the bright sub-pixel lines along silhouettes and edge-on surfaces.
+ *
+ * At a silhouette the surface is seen exactly edge-on: the normal is perpendicular to the view ray, Fresnel is ~1
+ * and the mirror reflection continues straight along the ray, i.e. it shows whatever is behind the object. When
+ * that matches what the neighbouring background pixels show, coverage doesn't matter and the edge can't alias (the
+ * "corrected edge normals + Fresnel + SSR" trick). Two things break it here:
+ *
+ * - Normals past edge-on. Interpolated and normal-mapped normals near a silhouette often face slightly away from the
+ *   camera. three clamps N·V to 0 (full Fresnel) and the reflection vector bends back to some unrelated, often bright,
+ *   part of the environment. `correctNormals` tilts the shading normal towards the view direction just enough to keep
+ *   N·V >= minNdotV, so the reflection continues along the view ray instead.
+ * - The background. The environment lights the model but the visible background is black, so the correct grazing
+ *   reflection is a bright line on black: the worst case for antialiasing. `backgroundMatch` fades the environment
+ *   reflection towards the visible background (black) as the reflection direction approaches the view ray. That only
+ *   happens at grazing angles, so the faces seen head on and at moderate angles are unchanged.
+ *
+ * Not physically based: the model is lit by a world the camera doesn't show. Uniforms, so they change without a
+ * recompile; all on by default.
+ */
+class EdgeReflections {
+
+  // Defaults tuned in the AA lab: all on, full match, ground glass edges fully rough
+  constructor({ correctNormals = true, minNdotV = 0.02, backgroundMatch = 1, width = 0.18,
+    groundGlassEdges = true, glassEdgeRoughness = 1 } = {}) {
+    this._groundEdges = T.uniform(groundGlassEdges ? 1 : 0);
+    this._edgeRoughness = T.uniform(glassEdgeRoughness);
+    this._correct = T.uniform(correctNormals ? 1 : 0);
+    this._minNdotV = T.uniform(minNdotV);
+    this._match = T.uniform(backgroundMatch);
+    this._width = T.uniform(width);
+  }
+
+  /** Keeps the shading normal facing the camera by at least {@link minNdotV}. */
+  get correctNormals() {
+    return this._correct.value > 0;
+  }
+
+  set correctNormals(value) {
+    this._correct.value = value ? 1 : 0;
+  }
+
+  /** The smallest N·V the corrected normal keeps; near 0 the reflection runs along the view ray. */
+  get minNdotV() {
+    return this._minNdotV.value;
+  }
+
+  set minNdotV(value) {
+    this._minNdotV.value = value;
+  }
+
+  /** How much of the grazing environment reflection is replaced by the black background, 0..1. */
+  get backgroundMatch() {
+    return this._match.value;
+  }
+
+  set backgroundMatch(value) {
+    this._match.value = value;
+  }
+
+  /**
+   * The fade's reach, as 1 - cos of the angle between the reflection and the view ray: 0.18 fades reflections
+   * within ~35° of the ray, i.e. surfaces within ~17° of edge-on.
+   */
+  get width() {
+    return this._width.value;
+  }
+
+  set width(value) {
+    this._width.value = value;
+  }
+
+  /**
+   * Gives the thin side faces of glass panes this much roughness at least, as if their edges were ground (as framing
+   * glass usually is) instead of polished. A polished 2 mm edge mirrors the environment's lamps into a sub-pixel line,
+   * and the glass is drawn after the MSAA resolve, single-sampled, so nothing but TAA antialiases it.
+   */
+  get groundGlassEdges() {
+    return this._groundEdges.value > 0;
+  }
+
+  set groundGlassEdges(value) {
+    this._groundEdges.value = value ? 1 : 0;
+  }
+
+  get glassEdgeRoughness() {
+    return this._edgeRoughness.value;
+  }
+
+  set glassEdgeRoughness(value) {
+    this._edgeRoughness.value = value;
+  }
+
+  /**
+   * Returns the roughness of a glass pane, raised to {@link glassEdgeRoughness} on the faces whose (flat) normal is
+   * perpendicular to the pane's thickness axis, i.e. its edges.
+   *
+   * @param {Object} roughness - The material's roughness node.
+   * @param {Object} thicknessAxis - The pane's thinnest axis in object space (a vec3 node).
+   * @return {Object} The roughness node.
+   */
+  roughenGlassEdges(roughness, thicknessAxis) {
+    const edge = T.float(1).sub(T.normalLocal.dot(thicknessAxis).abs()).mul(this._groundEdges);
+    return T.mix(roughness, roughness.max(this._edgeRoughness), edge);
+  }
+
+  /**
+   * Returns the shading normal tilted towards the view direction where N·V < minNdotV: n + v * (minNdotV - N·V)
+   * brings N·V to exactly minNdotV before normalizing, the smallest change that does.
+   *
+   * @param {Object} normal - The view-space shading normal, normal maps included.
+   * @return {Object} The corrected normal node.
+   */
+  correct(normal) {
+    const view = T.positionViewDirection;
+    const deficit = this._minNdotV.sub(normal.dot(view)).max(0).mul(this._correct);
+    return normal.add(view.mul(deficit)).normalize();
+  }
+
+  /**
+   * Returns the multiplier for the indirect specular: 1 until the reflection direction comes within {@link width} of
+   * the view ray, then towards 1 - backgroundMatch.
+   *
+   * @return {Object} The scale node.
+   */
+  factor() {
+    const view = T.positionViewDirection;
+    // Mirror direction of the eye ray; dot with the ray is 1 exactly edge-on, -1 head on.
+    const reflected = T.reflect(view.negate(), T.normalView);
+    const alignment = reflected.dot(view.negate());
+    const grazing = T.smoothstep(T.float(1).sub(this._width), 1, alignment);
+    return T.float(1).sub(grazing.mul(this._match));
   }
 
 }
@@ -281,11 +420,18 @@ function createVelocityNode(viewProjection, previousViewProjection, currentModel
  * program cache key keeps its TSL graph identity) and only inject the roughness filter and the optional
  * specular clamp.
  */
-function createMaterialClasses(specularAA, grazingClamp) {
+function createMaterialClasses(specularAA, grazingClamp, edgeReflections) {
   const create = (Base) => class extends Base {
+
+    setupNormal(builder) {
+      // normalView, and through it the lighting and the reflection vector, read this
+      return edgeReflections.correct(super.setupNormal(builder));
+    }
 
     setupVariants(builder) {
       super.setupVariants(builder);
+      // Glass panes: the thin side faces, ground instead of polished (see EdgeReflections.groundGlassEdges)
+      if (this.paneThicknessAxis) T.roughness.assign(edgeReflections.roughenGlassEdges(T.roughness, this.paneThicknessAxis));
       // Equal to the reference patch: only ever makes surfaces rougher, normal maps included.
       T.roughness.assign(specularAA.filter(T.roughness, T.normalView));
       if (this.useClearcoat) T.clearcoatRoughness.assign(specularAA.filter(T.clearcoatRoughness, T.clearcoatNormalView));
@@ -297,7 +443,7 @@ function createMaterialClasses(specularAA, grazingClamp) {
       model.finish = (builder) => {
         // The clamp scales the base outgoing light first: the physical model's finish then composes
         // clearcoat and sheen on the clamped value, exactly like the reference clamp before that composition.
-        grazingClamp.apply(builder.context);
+        grazingClamp.apply(builder.context, edgeReflections.factor());
         finish(builder);
       };
       return model;
@@ -371,6 +517,8 @@ export class WebGpuGeometry {
    * @param {string} [options.encoding='rgb'] - The MSAA curve, one of {@link ENCODINGS}.
    * @param {Object} [options.specularAA] - Specular antialiasing settings: `{enabled, variance, threshold}`.
    * @param {Object} [options.grazingClamp] - Grazing clamp settings: `{enabled, angle, limit}`.
+   * @param {Object} [options.edgeReflections] - Edge reflection settings: `{correctNormals, minNdotV,
+   *   backgroundMatch, width}`, see {@link EdgeReflections}.
    */
   constructor(renderer, {
     scene = null,
@@ -380,6 +528,7 @@ export class WebGpuGeometry {
     encoding = 'rgb',
     specularAA = {},
     grazingClamp = {},
+    edgeReflections = {},
   } = {}) {
     if (!renderer) throw new Error('WebGpuGeometry: a native WebGPURenderer is required');
     this.renderer = renderer;
@@ -388,7 +537,8 @@ export class WebGpuGeometry {
 
     this.specularAA = new SpecularAntialiasing(specularAA);
     this.grazingClamp = new GrazingSpecularClamp(grazingClamp);
-    this._materialClasses = createMaterialClasses(this.specularAA, this.grazingClamp);
+    this.edgeReflections = new EdgeReflections(edgeReflections);
+    this._materialClasses = createMaterialClasses(this.specularAA, this.grazingClamp, this.edgeReflections);
 
     this._exposure = T.uniform(exposure);
     this._encoding = T.uniform(encodingIndex(encoding));
@@ -792,7 +942,17 @@ export class WebGpuGeometry {
     const Base = source.isMeshPhysicalMaterial === true ? this._materialClasses.physical : this._materialClasses.standard;
     const material = new Base().copy(source);
 
-    if (!record.glass) {
+    if (record.glass) {
+      // A pane: one bounding box extent much thinner than the other two. Its edges are the faces along that axis.
+      const geometry = record.mesh.geometry;
+      if (geometry.boundingBox === null) geometry.computeBoundingBox();
+      const size = geometry.boundingBox.getSize(new GPU.Vector3()).toArray();
+      const sorted = [...size].sort((a, b) => a - b);
+      if (sorted[0] < 0.1 * sorted[1]) {
+        const axis = size.indexOf(sorted[0]);
+        material.paneThicknessAxis = T.vec3(axis === 0 ? 1 : 0, axis === 1 ? 1 : 0, axis === 2 ? 1 : 0);
+      }
+    } else {
       material.outputNode = createEncodedOutputNode(this._exposure, this._encoding);
       material.mrtNode = T.mrt({ velocity: createVelocityNode(this._viewProjection, this._previousViewProjection, record.currentModel, record.previousModel) });
     }
