@@ -2,6 +2,8 @@ html, body { margin: 0; background: #000; color: #ddd; font: 12px/1.45 ui-monosp
 /* Full viewport by default; ?fixed=1 pins the 900x600 framebuffer used for measurement runs */
 body { overflow: hidden; }
 canvas { width: 100vw; height: 100vh; display: block; }
+/* Let camera controls own canvas gestures without disabling the sidebar's native touch scrolling. */
+#c { touch-action: none; }
 body.fixed canvas { width: 900px; height: 600px; }
 
 #panel {
