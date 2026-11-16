@@ -2,6 +2,7 @@ import * as THREE from "three"
 import { chooseBackend, normalizeBackend } from "./BackendSelection.js"
 import { OrbitControls } from "./OrbitControls.js"
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js"
+import { KTX2Loader } from "./loaders/KTX2Loader.js"   // patched copy: XUASTC + Basis 2.x transcoder
 import { HDRJPGLoader } from "@monogrid/gainmap-js"
 import { DitheringEffect } from "./postprocessing/DitheringEffect.js"
 import { TonemappedResolvePass } from "./postprocessing/TonemappedResolvePass.js"
@@ -649,9 +650,16 @@ export class ThreeSceneManager {
 	loadArtworkModel() {
 		return new Promise((resolve, reject) => {
 			const loader = new GLTFLoader()
+			// KTX2 / Basis Universal textures (KHR_texture_basisu) stay GPU-compressed in VRAM. The transcoder workers
+			// are only needed while loading, so the loader is disposed once the model is in.
+			const ktx2 = new KTX2Loader().setTranscoderPath(`${import.meta.env.BASE_URL}basis2/`).detectSupport(this.renderer)
+			// Basis transcoders are single-threaded per texture; decode several textures at once, one worker each.
+			ktx2.setWorkerLimit(Math.min(navigator.hardwareConcurrency || 4, 8))
+			loader.setKTX2Loader(ktx2)
 			loader.load(
 				this.modelUrl,
 				async (gltf) => {
+					ktx2.dispose()
 					try {
 						if (this.hasAborted || this.disposed) { disposeObject(gltf.scene); resolve(); return }
 						await this.addModel(gltf.scene)
@@ -660,6 +668,7 @@ export class ThreeSceneManager {
 				},
 				undefined,
 				(error) => {
+					ktx2.dispose()
 					reject("Failed to load artwork model: " + error)
 				}
 			)
@@ -684,7 +693,8 @@ export class ThreeSceneManager {
 			texture.minFilter = THREE.LinearMipmapLinearFilter
 			texture.magFilter = THREE.LinearFilter
 			texture.anisotropy = this.renderer.capabilities.getMaxAnisotropy()
-			texture.generateMipmaps = true
+			// GPU-compressed (KTX2) textures carry their own mip chain; they can't be mipmapped at runtime
+			if (!texture.isCompressedTexture) texture.generateMipmaps = true
 		}
 	}
 

@@ -2,58 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AA lab</title>
 </head>
 <body>
   <canvas id="c"></canvas>
-
-  <script type="module">
-    // The panel, query parameters and hotkeys live in src/lab/lab-panel.js, shared with aa-lab-pickets.html.
-    import { init } from "/src/renderer.js"
-    import { startAaLab } from "/src/lab/lab-panel.js"
-
-    // The model spins, the camera orbits, or the frame's clips slide on their own (only the velocity buffer sees those,
-    // the rigid reprojection treats them as part of the still model). The speed slider is in degrees per second.
-    let partsTime = 0
-    let clipCache = null
-    const clips = (mgr) => clipCache ??= (() => {
-      const list = []
-      mgr.model.traverse((o) => { if (o.isMesh && o.name.startsWith("CLIP")) list.push({ mesh: o, base: o.position.x }) })
-      return list
-    })()
-
-    const motion = {
-      modes: [["still", "still"], ["model", "model"], ["camera", "camera"], ["both", "model + camera"], ["parts", "parts (clips slide)"]],
-      defaultMode: "model",
-      speed: { label: "speed °/s", min: 0, max: 720, step: 1, value: 45, format: (v) => `${v}°` },
-      apply(mgr, { mode, speed }, dt) {
-        const radians = (speed * Math.PI / 180) * dt
-        if (mode === "model" || mode === "both") mgr.model.rotateY(-radians)
-        // Drive the orbit goal, not the camera itself: OrbitControls keeps damping towards it and a manual drag adds to
-        // the same goal, so the automatic orbit and the mouse don't fight each other.
-        if (mode === "camera" || mode === "both") mgr.controls._goalSpherical.theta -= radians
-        if (mode === "parts") {
-          partsTime += dt * speed / 45
-          for (const { mesh, base } of clips(mgr)) mesh.position.x = base + Math.sin(partsTime * Math.PI * 2) * 0.03
-        } else if (partsTime !== 0) {
-          partsTime = 0
-          for (const { mesh, base } of clips(mgr)) mesh.position.x = base
-        }
-      },
-    }
-
-    startAaLab({
-      init,
-      motion,
-      options: {
-        // BASE_URL keeps the lab working under any deploy prefix ("/monk-viewer/" in prod, "/" in preview)
-        modelUrl: `${import.meta.env.BASE_URL}False_Enlightenment.glb`,
-        envmapUrl: "https://raw.githubusercontent.com/Arecsu/model-viewer/monk/packages/shared-assets/environments/old_bus_depot_2k_HDR.jpg",
-        targetDistance: 0.8,
-        minDistance: 0.3,
-        maxDistance: 2.0,
-      },
-    })
-  </script>
+  <script type="module" src="/src/lab/aa-lab.js"></script>
 </body>
 </html>

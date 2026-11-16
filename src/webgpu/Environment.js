@@ -228,6 +228,19 @@ export async function loadWebGpuEnvironment(renderer, url, { signal } = {}) {
     };
 
     try {
+        // TEMP (env resolution test): raw Radiance .hdr straight into PMREM, no gain map.
+        if (/\.hdr($|\?)/i.test(url)) {
+            const { HDRLoader } = await import('three/examples/jsm/loaders/HDRLoader.js');
+            const hdr = await new HDRLoader().setDataType(GPU.HalfFloatType).loadAsync(url);
+            scratch.add(() => hdr.dispose());
+            hdr.mapping = GPU.EquirectangularReflectionMapping;
+            hdr.minFilter = GPU.LinearFilter; hdr.magFilter = GPU.LinearFilter; hdr.generateMipmaps = false;
+            if (renderer.hasInitialized() === false) await renderer.init();
+            console.log(`[env test] ${url}: ${hdr.image.width}x${hdr.image.height} -> PMREM cube face ${2 ** Math.floor(Math.log2(hdr.image.width / 4))}px`);
+            const texture = prefilterEnvironment(renderer, hdr, scratch, environment);
+            await releaseScratch();
+            return { texture, dispose: () => environment.dispose() };
+        }
         const jpegBuffer = await loadJPEGBuffer(url, signal);
         signal?.throwIfAborted();
         const source = await abortable(extractGainMapSource(jpegBuffer, url), signal);
@@ -288,5 +301,6 @@ function applyTextureOptimization(texture, anisotropy) {
     texture.minFilter = GPU.LinearMipmapLinearFilter;
     texture.magFilter = GPU.LinearFilter;
     texture.anisotropy = anisotropy;
-    texture.generateMipmaps = true;
+    // GPU-compressed (KTX2) textures carry their own mip chain; they can't be mipmapped at runtime
+    if (!texture.isCompressedTexture) texture.generateMipmaps = true;
 }

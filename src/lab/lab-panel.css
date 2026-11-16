@@ -38,6 +38,7 @@ body.fixed canvas { width: 900px; height: 600px; }
   background: #1a1c20; color: #8b949e; border: 1px solid #2c2f35; border-radius: 4px; cursor: pointer;
 }
 #show-panel.hidden { display: none; }
+.row > select { flex: 1 1 0; min-width: 0; width: 0; text-overflow: ellipsis; }
 select { font: inherit; font-size: 11px; background: #1a1c20; color: #cfd8e3; border: 1px solid #2c2f35; border-radius: 4px; padding: 2px 4px; }
 #benchmark-result { color: #7f8a95; margin-top: 2px; }
 #benchmark-result b { color: #cfe3dc; font-weight: 500; }

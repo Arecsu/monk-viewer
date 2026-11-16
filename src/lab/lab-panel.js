@@ -23,6 +23,8 @@ const panelMarkup = (title, motion) => `
       <div class="toggles"><button id="hide-panel">hide</button></div>
     </header>
 
+    <div id="lab-scene-controls"></div>
+
     <h2>Renderer</h2>
     <div class="row"><label for="backend">backend</label><select id="backend">
       <option value="auto">auto (WebGPU if available)</option><option value="webgl">WebGL reference</option><option value="webgpu">native WebGPU</option>
@@ -153,10 +155,12 @@ const panelMarkup = (title, motion) => `
  * @param {string} [lab.title] - Panel heading.
  * @param {Object} [lab.grading] - GT7 tone mapping values applied on load, for scenes lit differently.
  * @param {number} [lab.maxPixelRatio] - Caps the device pixel ratio of live (non-fixed) runs.
+ * @param {Function} [lab.setupSceneControls] - Mounts scene/model choices before renderer initialization.
  */
-export function startAaLab({ init, options, motion, title = "TAA lab", grading = null, maxPixelRatio = Infinity }) {
+export function startAaLab({ init, options, motion, title = "TAA lab", grading = null, maxPixelRatio = Infinity, setupSceneControls = null }) {
 	window.THREE = THREE
 	document.body.insertAdjacentHTML("beforeend", panelMarkup(title, motion))
+	setupSceneControls?.(document.getElementById("lab-scene-controls"))
 
 	const params = new URLSearchParams(location.search)
 	// A literal "+" in a query string decodes as a space
